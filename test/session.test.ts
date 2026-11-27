@@ -134,3 +134,40 @@ test("another agent (or one that can't reopen sessions) gets a recap in a new se
 	expect(s.chat.messages.map((m) => m.role)).toEqual(["user", "assistant", "system", "user"]);
 	expect(s.session).toEqual({ id: "s1", agent: "codex" });
 });
+
+test("Claude Code with environment lines (a local model) is still isolated and gets them", async () => {
+	const { s, agent, spawned } = session(undefined, { resolve: async () => ({ ok: true, id: "claude", name: "Claude Code", command: ["/bin/claude-agent-acp"], env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8000" } }) });
+	await s.ask("Hi");
+	expect(spawned()!.env).toMatchObject({ HOME: "/Users/me", ANTHROPIC_BASE_URL: "http://127.0.0.1:8000" });
+	expect(agent.newSession._meta).toEqual(CLAUDE_ISOLATION);
+});
+
+const AUTO = { currentModeId: "auto", availableModes: [{ id: "auto" }, { id: "default" }, { id: "plan" }] };
+
+test("Claude Code leaves the person's Auto mode for its default mode, which asks before each tool", async () => {
+	const { s, agent } = session();
+	agent.modes = AUTO;
+	await s.ask("Hi");
+	expect(agent.setMode).toEqual([{ sessionId: "s1", modeId: "default" }]);
+	// Before the first question.
+	expect(agent.sent.findIndex((m) => m.method === "session/set_mode")).toBeLessThan(agent.sent.findIndex((m) => m.method === "session/prompt"));
+});
+
+test("a reopened Claude Code session also leaves Auto; other agents' modes and a default session are left alone", async () => {
+	const reopened = session(undefined, { agentKey: () => "claude" });
+	reopened.agent.loadable = [];
+	reopened.agent.modes = AUTO;
+	reopened.s.restore(saved, { sessionId: "old-1", agent: "claude" });
+	await reopened.s.ask("And tomorrow?");
+	expect(reopened.agent.setMode).toEqual([{ sessionId: "old-1", modeId: "default" }]);
+
+	const already = session();
+	already.agent.modes = { ...AUTO, currentModeId: "default" };
+	await already.s.ask("Hi");
+	expect(already.agent.setMode).toEqual([]);
+
+	const codex = session(undefined, { resolve: async () => ({ ok: true, id: "codex", name: "Codex", command: ["/bin/codex-acp"], env: {} }) });
+	codex.agent.modes = AUTO;
+	await codex.s.ask("Hi");
+	expect(codex.agent.setMode).toEqual([]);
+});

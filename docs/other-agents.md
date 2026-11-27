@@ -21,30 +21,38 @@ accepts them but doesn't pass them to its model answers without any Toolbelt too
 ## A local model (for example oMLX)
 
 Local inference servers such as oMLX, LM Studio, Ollama or llama.cpp expose an OpenAI-compatible
-API (`http://localhost:<port>/v1`). Point an ACP agent that supports MCP and custom model providers
-at it.
+API (`http://localhost:<port>/v1`), and some (oMLX among them) also Anthropic's Messages API. Use
+a model that handles tool calls well; small models often don't call tools at all and answer from
+nothing.
 
-**Codex** suits this: its ACP adapter passes Toolbelt's MCP server through, and Codex supports
-custom model providers in `~/.codex/config.toml`, which `codex-acp` reads. Add a provider for your
-server and make it the model Codex uses (see Codex's configuration docs for the current keys):
+**Claude Code** suits a server that speaks the Messages API: open **Claude Code** in the agents
+list and fill in its **Environment**. [Local models](local-models.md) has the lines, including
+the ones that keep everything on your Mac, and how to set up the server and what to expect.
+
+Use the built-in Claude Code rather than adding `claude-agent-acp` as a custom agent: a custom
+agent isn't isolated. Claude Code then sends its whole toolset (several times the prompt, so slower
+answers on a local model), reads your Claude settings and MCP servers, and runs in your own
+permission mode; if that's Auto, a local model has every tool refused.
+
+**Codex** works with a server that speaks the OpenAI Responses API: its ACP adapter passes
+Toolbelt's MCP server through, and Codex supports custom model providers. Keep it apart from your
+everyday Codex with its own configuration folder: add a custom agent with the command `codex-acp`
+and the environment line `CODEX_HOME=/Users/<you>/.codex-local`, and put the provider in that
+folder's `config.toml` (see Codex's configuration docs for the current keys):
 
 ```toml
 model_provider = "local"
-model = "your-model-name"                 # as your server names it
+model = "your-model-name"               # as your server names it
+model_reasoning_effort = "none"
 
 [model_providers.local]
 name = "Local (oMLX)"
 base_url = "http://localhost:8000/v1"   # your server's address
+env_key = "LOCAL_API_KEY"               # set it in the agent's environment, if the server has a key
+wire_api = "responses"
 ```
 
-Then pick **Codex**. That changes Codex's default everywhere; to keep it separate, use a Codex
-profile and start the adapter with it as a custom command, as `codex-acp`'s README describes. Use a
-model that handles tool calls well; small models often don't call tools at all and answer from
-nothing.
-
-**Claude Code** works too when the local server speaks Anthropic's Messages API (or through a
-proxy that translates it): add an ACP agent with the command `claude-agent-acp` and
-the environment line `ANTHROPIC_BASE_URL=http://localhost:<port>`.
+Codex's own instructions and tools come along, so its prompt is long for a local model.
 
 ## pi
 

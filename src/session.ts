@@ -2,7 +2,7 @@
 // and nothing else, streams its answer into the chat, and refuses its permission requests for
 // anything but ToolBelt's tools. Closing it (a new chat, other settings) stops the agent.
 import { existsSync, mkdirSync } from "node:fs";
-import { AcpClient, AgentError, spawnTransport, type McpServer, type PermissionOutcome, type PermissionRequest, type Transport } from "./acp";
+import { AcpClient, AgentError, spawnTransport, type McpServer, type Modes, type PermissionOutcome, type PermissionRequest, type Transport } from "./acp";
 import type { Resolved } from "./agents";
 import type { Message } from "@toolbelt/sdk";
 import { Chat, toolName } from "./chat";
@@ -194,7 +194,8 @@ export class AgentSession {
 			this.sessionId = resume.sessionId;
 			this.loading = true;
 			try {
-				await client.loadSession(resume.sessionId, this.o.workdir, [toolbelt], meta);
+				const loaded = await client.loadSession(resume.sessionId, this.o.workdir, [toolbelt], meta);
+				if (agent.id === "claude") await this.askFirst(client, resume.sessionId, loaded?.modes);
 				this.session = { id: resume.sessionId, agent: key };
 				return { client, sessionId: resume.sessionId, info: hello.agentInfo, resumed: true };
 			} catch (e) {
@@ -205,10 +206,26 @@ export class AgentSession {
 			}
 			if (client.closed) throw new Error(`${agent.name} stopped while reopening the chat.`);
 		}
-		const { sessionId } = await client.newSession(this.o.workdir, [toolbelt], meta);
+		const { sessionId, modes } = await client.newSession(this.o.workdir, [toolbelt], meta);
 		this.sessionId = sessionId;
+		if (agent.id === "claude") await this.askFirst(client, sessionId, modes);
 		this.session = { id: sessionId, agent: key };
 		return { client, sessionId, info: hello.agentInfo, resumed: false };
+	}
+
+	/**
+	 * Claude Code starts in the person's own `permissions.defaultMode` (its adapter reads their settings
+	 * even when the session doesn't), often Auto, which decides on its own and, through another
+	 * endpoint such as a local model, refuses every tool. Its default mode asks this client instead,
+	 * which allows ToolBelt's tools and nothing else.
+	 */
+	private async askFirst(client: AcpClient, sessionId: string, modes: Modes | null | undefined) {
+		if (!modes || modes.currentModeId === CLAUDE_MODE || !modes.availableModes.some((m) => m.id === CLAUDE_MODE)) return;
+		try {
+			await client.setMode(sessionId, CLAUDE_MODE);
+		} catch (e) {
+			this.o.log?.(`couldn't switch Claude Code to its ${CLAUDE_MODE} mode: ${(e as Error).message}`);
+		}
 	}
 
 	/** ToolBelt's MCP server, as the agent should start it. */
@@ -241,6 +258,9 @@ export class AgentSession {
 export const CLAUDE_ISOLATION = {
 	claudeCode: { options: { tools: [], settingSources: [], strictMcpConfig: true, allowDangerouslySkipPermissions: false } },
 };
+
+/** Claude Code's permission mode that asks the client about each tool. */
+export const CLAUDE_MODE = "default";
 
 /** A call to one of ToolBelt's MCP tools, by the names agents give them. */
 export function isToolbeltTool(request: PermissionRequest): boolean {

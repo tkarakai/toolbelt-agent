@@ -3,8 +3,8 @@
 // are refused), forwards `session/update` notifications and asks its owner about
 // `session/request_permission`. https://agentclientprotocol.com
 //
-// Only what the chat needs is here: initialize, session/new, session/load, session/prompt and
-// session/cancel.
+// Only what the chat needs is here: initialize, session/new, session/load, session/set_mode,
+// session/prompt and session/cancel.
 
 export const PROTOCOL_VERSION = 1;
 
@@ -33,6 +33,9 @@ export type ContentBlock = { type: "text"; text: string } | { type: string; [key
 export type PermissionOption = { optionId: string; name: string; kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" };
 export type PermissionRequest = { sessionId: string; toolCall: ToolCall; options: PermissionOption[] };
 export type PermissionOutcome = { outcome: "cancelled" } | { outcome: "selected"; optionId: string };
+
+/** The permission modes an agent offers (`SessionModeState`), when it has any. */
+export type Modes = { currentModeId: string; availableModes: { id: string; name?: string }[] };
 
 export type McpServer = { name: string; command: string; args: string[]; env: { name: string; value: string }[] };
 export type StopReason = "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" | "cancelled";
@@ -92,13 +95,17 @@ export class AcpClient {
 	}
 
 	newSession(cwd: string, mcpServers: McpServer[], meta?: Record<string, unknown>) {
-		return this.request<{ sessionId: string }>("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
+		return this.request<{ sessionId: string; modes?: Modes | null }>("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
 	}
 
 	/** Reopens an earlier session (only when the agent offers `loadSession`). The agent replays its
 	 *  history as `session/update`s before answering. */
 	loadSession(sessionId: string, cwd: string, mcpServers: McpServer[], meta?: Record<string, unknown>) {
-		return this.request<unknown>("session/load", { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
+		return this.request<{ modes?: Modes | null } | null>("session/load", { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
+	}
+
+	setMode(sessionId: string, modeId: string) {
+		return this.request<unknown>("session/set_mode", { sessionId, modeId });
 	}
 
 	prompt(sessionId: string, prompt: ContentBlock[]) {

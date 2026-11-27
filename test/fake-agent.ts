@@ -10,6 +10,9 @@ export class FakeAgent {
 	loadSession: any = null;
 	/** Offer `loadSession`, replaying these updates when a session is reopened. */
 	loadable: unknown[] | null = null;
+	/** The permission modes session/new and session/load report, and the set_mode requests received. */
+	modes: { currentModeId: string; availableModes: { id: string }[] } | null = null;
+	setMode: any[] = [];
 	private onLine: (line: string) => void = () => {};
 	private onClose: (reason: string) => void = () => {};
 	private next = 1000;
@@ -61,11 +64,14 @@ export class FakeAgent {
 		else if (m.method === "session/load") {
 			this.loadSession = m.params;
 			for (const u of this.loadable ?? []) this.update(m.params.sessionId, u);
-			reply(null);
+			reply(this.modes ? { modes: this.modes } : null);
 		}
 		else if (m.method === "session/new") {
 			this.newSession = m.params;
-			reply({ sessionId: "s1" });
+			reply({ sessionId: "s1", ...(this.modes ? { modes: this.modes } : {}) });
+		} else if (m.method === "session/set_mode") {
+			this.setMode.push(m.params);
+			reply({});
 		} else if (m.method === "session/prompt") {
 			const stopReason = (await this.turn(this, m.params.sessionId, m.params.prompt)) ?? "end_turn";
 			reply({ stopReason });

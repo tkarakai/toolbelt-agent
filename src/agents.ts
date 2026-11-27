@@ -21,6 +21,8 @@ export type AgentKind = {
 	note: string;
 	/** A lucide icon for its row in the settings. */
 	icon: string;
+	/** Takes environment lines from its setup (another model or server), and how the field reads. */
+	env?: { placeholder: string; description: string };
 };
 
 export const AGENTS: AgentKind[] = [
@@ -32,6 +34,10 @@ export const AGENTS: AgentKind[] = [
 		install: "npm install -g @agentclientprotocol/claude-agent-acp",
 		note: "Uses your Claude Code login: run `claude` once and log in.",
 		icon: "asterisk",
+		env: {
+			placeholder: "ANTHROPIC_BASE_URL=http://localhost:8000\nANTHROPIC_MODEL=my-local-model",
+			description: "NAME=value lines for Claude Code's environment, to use another model or server (such as a local one) instead of your Claude login. Leave empty for your login.",
+		},
 	},
 	{
 		id: "codex",
@@ -160,7 +166,7 @@ export type Resolved =
 	| { ok: false; id: AgentId; name: string; reason: string; install?: string };
 
 /** The command to start the chosen agent with, or why it can't start. */
-export function resolveAgent(settings: { agent: AgentId; customName?: string; customCommand?: string; customEnv?: string }, path: string): Resolved {
+export function resolveAgent(settings: { agent: AgentId; customName?: string; customCommand?: string; customEnv?: string; env?: string }, path: string): Resolved {
 	const name = agentName(settings.agent, settings.customName);
 	if (settings.agent === "custom") {
 		let words: string[];
@@ -177,7 +183,13 @@ export function resolveAgent(settings: { agent: AgentId; customName?: string; cu
 		return { ok: true, id: "custom", name, command: [found, ...words.slice(1)], env };
 	}
 	const kind = AGENTS.find((a) => a.id === settings.agent)!;
+	let env: Record<string, string> = {};
+	try {
+		if (kind.env) env = parseEnv(settings.env ?? "");
+	} catch (e) {
+		return { ok: false, id: kind.id, name, reason: (e as Error).message };
+	}
 	const found = which(kind.command, path);
 	if (!found) return { ok: false, id: kind.id, name, reason: `${kind.name}'s ACP mode isn't installed.`, install: kind.install };
-	return { ok: true, id: kind.id, name, command: [found, ...kind.args], env: {} };
+	return { ok: true, id: kind.id, name, command: [found, ...kind.args], env };
 }
