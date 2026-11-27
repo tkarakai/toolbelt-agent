@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.3.0 — 2026-11-27
 - Claude Code no longer runs in your own Claude Code permission mode. If yours was Auto, a Claude Code using another endpoint (such as a local model) had every Toolbelt tool refused; now it asks the plugin, which allows Toolbelt's tools and nothing else, whatever your mode.
 - **Claude Code with another model.** Claude Code's setup has an Environment field (`NAME=value` lines), so it can use a local model server such as oMLX, or another Anthropic-compatible endpoint, instead of your Claude login. It still starts without its own tools, settings and MCP servers, which keeps the prompt short for a local model. [Local models](docs/local-models.md) has the lines for a setup that stays on your Mac, server settings and measured results.
 
