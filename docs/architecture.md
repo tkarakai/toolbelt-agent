@@ -9,8 +9,9 @@ approvals and audit log.
 
 Toolbelt launches the bundled `index.js` with Bun. The plugin uses the public `@toolbelt/sdk`
 package over JSON lines on stdin/stdout; stderr is diagnostic output (agent stderr is relayed to it
-prefixed `[agent]`). The manifest declares `floating` (shortcut K), no screens, capability
-`ui.floating`, and `agent.access: "none"`: agents never read the chat itself.
+prefixed `[agent]`). The manifest declares `floating` (shortcut K), no screens, capabilities
+`ui.floating`, `ui.collapsible-cards` and `secrets` (Toolbelt 0.8.0, SDK 0.6.0), and
+`agent.access: "none"`: agents never read the chat itself.
 
 The only surface is `floating`. `src/ui.ts` renders it as a pure function of the state:
 
@@ -19,9 +20,23 @@ The only surface is `floating`. `src/ui.ts` renders it as a pure function of the
   with its install state or last start, "In use" on the active one, an inline `use` and, for
   inactive custom agents, `delete` (confirmed); its `open-agent` opens an agent's page, and the
   last row (`add`) a new custom agent. Done (`done`) once an agent is in use.
-- **An agent's page** (subtitle its name, `back`): a built-in agent's install state and login
-  note (and, for Claude Code, a form `agent` with its `env` lines), or a custom agent's form (`agent`: `name`, `command`, `env`), and a card (`connection`)
-  with `test`, `discard`, `save` and `use` ("Use X", or Save for the agent in use).
+- **An agent's page** (subtitle its name, `back`), then a card (`connection`) with `test`,
+  `discard`, `save` and `use` ("Use X", or Save for the agent in use):
+  - **Model API:** a card (`server`, titled with the preset, its description where chats go:
+    "Stays on this Mac" or "Sends chats to <host>") with the form `model-api`: `preset`, `url`,
+    `key` (a Keychain secret field, `model-api/key`; absent for presets without keys), `model`
+    (a combobox of the server's models, freeform) and `thinking`. Then two collapsible cards:
+    `advanced` (form `model-api-advanced`: `api`, `maxOutput`, `context`, `maxSteps`,
+    `instructions`, `extra`) and `guide` ("Before you start": the checklist for a local or hosted
+    server, the preset's own item first). A failed Test that says what went wrong (`guide`)
+    puts that item at the top and opens the card (`open: true`; left out otherwise).
+  - **Another built-in agent:** its install state and login note, and for Claude Code a form
+    `agent` with its `env` field.
+  - **A custom agent:** the form `agent`: `name`, `command` and `env`.
+
+  `env` is an `environment` field with `secretPrefix` `agents/<id>/env` (`custom:1` becomes
+  `custom-1`): Toolbelt keeps a secret variable's value in the Keychain and the plugin gets the
+  entry without it.
 - **Chats** (`mode: "panel"`, subtitle `Chats · N`, from `history`): a search form (`history`,
   field `search`, matched against titles when committed), then one `list` per period (Pinned,
   Today, Yesterday, Earlier this week, This month, Older) under a muted heading. A row's
@@ -44,11 +59,18 @@ resets on restart.
 
 ## Agents
 
-`src/agents.ts` lists the agents (Claude Code's adapter `claude-agent-acp`, Codex's `codex-acp`,
-`gemini --acp`) and resolves the chosen one to a command, or to why it can't start (with its
-install command). A custom agent is a command line (split like a shell would, without running one)
-plus `NAME=value` environment lines; Claude Code (`AgentKind.env`) takes such lines too, to use
-another model or server, and keeps its isolation (below) with them. Commands are looked up in the person's login-shell PATH
+`src/agents.ts` lists the agents (the bundled Model API agent, Claude Code's adapter
+`claude-agent-acp`, Codex's `codex-acp`, `gemini --acp`) and resolves the chosen one to a
+command, or to why it can't start (with its install command). The Model API agent
+(`AgentKind.bundled`) is always there: ToolBelt's Bun (`process.execPath`) running `model-api.js`
+beside `index.js` (`modelApiCommand`). A custom agent is a command line (split like a shell would,
+without running one) plus environment variables; Claude Code (`AgentKind.env`) takes variables
+too, to use another model or server, and keeps its isolation (below) with them.
+`connections.ts` reads an agent's environment when it starts (`resolveConnection`): its selected
+variables, secret ones from the Keychain (`ctx.secrets.get`), or for the Model API agent its
+`TOOLBELT_MODEL_API_*` variables with the key from `model-api/key` and `STATE` in the plugin's
+`model-api/` data folder. A secret variable without a saved value keeps the agent from starting
+and says which. Commands are looked up in the person's login-shell PATH
 (read once, by asking `$SHELL -ilc` to print it, 5 s limit) followed by the usual install folders
 (`~/.local/bin`, `~/.bun/bin`, Homebrew, `/usr/local/bin`, …), because Toolbelt starts plugins with
 the app's minimal PATH. Agents run with that PATH and only `HOME`, `USER`, `LANG`, `LC_ALL`,
@@ -64,7 +86,7 @@ bundled agent is the plugin's own Model API agent (below).
 `src/model-api/` is ToolBelt's own lightweight agent for any model server, local (oMLX,
 llama.cpp, Ollama, LM Studio) or hosted (OpenRouter, OpenAI, Anthropic, Gemini). It's built to
 `model-api.js` in the archive (minified, about 1.2 MB; about 300 KB of the archive) and runs as its
-own Bun process that speaks ACP like any other agent. It isn't in the agents list yet.
+own Bun process that speaks ACP like any other agent. It's the agents list's **Model API** entry.
 
 - **Settings** (`config.ts`) arrive as `TOOLBELT_MODEL_API_*` variables:
   - `PRESET` and `URL`: the server;
@@ -102,6 +124,13 @@ own Bun process that speaks ACP like any other agent. It isn't in the agents lis
     the key was refused, the model is unknown, or the conversation is too long.
 - **ACP** (`server.ts`) offers `initialize`, `session/new`, `session/load` (which replays the user
   and agent messages), `session/prompt` and `session/cancel`. It never asks the client anything.
+- **Probe** (`_toolbelt/probe`, an ACP extension method): one request with a single `ping` tool,
+  answering `{ ok, text }` or `{ ok: false, reason, text }` with `reason` `server` (unreachable,
+  refused key, unknown model), `tools` (answered without calling it) or `model`. The settings'
+  Test calls it after opening a session (`AgentSession.check`) and shows its `text`; a failure's
+  `reason` opens "Before you start".
+- **Models**: the settings list the server's models (`listModels`, `GET <url>/models` with the
+  key) when the page opens and when the server, address, API or key changes, for the model field.
 
 ## ACP client and session
 
@@ -162,17 +191,19 @@ session records.
 ## Settings and switching
 
 `src/settings.ts` keeps every agent's setup: `active` (a built-in id or `custom:<id>`), `custom`
-(`id`, `name`, `command`, `env`), `env` (environment lines of built-in agents that take them,
-by id) and `tested` (each agent's last start from the settings: `ok`,
-`at`, `text`). The agent in use is always one that worked: `use` first starts the agent as it's
+(`id`, `name`, `command`, `vars`), `vars` (environment variables of built-in agents that take
+them, by id: `key`, `value`, `selected`, `secret`), `modelApi` (the Model API agent's settings, as
+strings, "" for the default) and `tested` (each agent's last start from the settings: `ok`,
+`at`, `text`). A secret variable's value is in the Keychain, not here. The agent in use is always one that worked: `use` first starts the agent as it's
 set up (a custom agent's draft) in a separate `AgentSession` whose `check()` opens a session
 without prompting, then saves the draft, makes it active and closes the conversation's agent so
 the next question starts the new one. If the start fails, nothing is saved and the active agent
 stays. `test` does the same start without switching. Starting from the settings never touches the
 conversation's own agent process.
 
-Edits to a custom agent, or to a built-in agent's environment lines, go to an in-memory draft
-(`drafts`) until `save`, `use` or `discard`; the
+Edits to a custom agent, a built-in agent's variables or the Model API settings go to an
+in-memory draft (`drafts`) until `save`, `use` or `discard`, except a secret value, which Toolbelt
+writes to the Keychain as it's typed (discarding the draft doesn't undo that); the
 list says "Unsaved changes" meanwhile. A draft's failed start isn't remembered as the saved
 setup's result. New custom agents exist only as drafts until saved. The agent in use can't be
 deleted.
@@ -180,11 +211,18 @@ deleted.
 ## Data
 
 The stable plugin id is `agent`. Data schema 1: `settings.json` in the data folder, written
-atomically: `active`, `custom`, `env`, `tested`, `keep` and `recent`, plus the first version's `agent`, `customName`,
-`customCommand` and `customEnv` mirrored from the agent in use, so older versions still read it.
-The first version's file (only those fields) loads as one active agent (a custom one becomes
+atomically: `active`, `custom`, `vars`, `modelApi`, `tested`, `keep` and `recent`, plus for older
+versions `env` (Claude Code's variables as `NAME=value` lines), each custom agent's `env` lines
+(both without secret variables) and the first version's `agent`, `customName`, `customCommand` and
+`customEnv` mirrored from the agent in use. Saved `vars` win over lines; an older version's lines
+load as variables, names that look secret (KEY, TOKEN, SECRET, PASSWORD, PASS, AUTH) marked
+secret. On start (active mode) `toKeychain` moves any such variable that still has a value here
+into the Keychain, once, and says so in the chat and a toast; a value it couldn't move stays and is
+tried again next start. The first version's file loads as one active agent (a custom one becomes
 `custom:1`). Unknown agents, malformed ids and results for missing agents are dropped.
-`threads/` holds saved chats (above); `workspace/` is the agents' working folder.
+`threads/` holds saved chats (above); `workspace/` is the agents' working folder; `model-api/`
+holds the Model API agent's chats. Keychain items (Toolbelt's, per plugin): `model-api/key` and
+`agents/<id>/env/<NAME>`; removing the plugin with its data deletes them.
 
 ## Tests
 

@@ -8,8 +8,9 @@ the MCP servers its client gives it. In the agents list, choose **Add an ACP age
   split into words the way a shell would (quotes group, backslash escapes) but no shell runs it, so
   `$VARIABLES`, `~` and pipes aren't expanded. Use full paths when the program isn't on your login
   shell's PATH.
-- **Environment**: `NAME=value` lines added to the agent's environment, such as a local server's
-  address. Lines starting with `#` are ignored.
+- **Environment**: variables added to the agent's environment, such as a local server's address.
+  A variable whose name looks secret (KEY, TOKEN, SECRET, PASSWORD, AUTH) is locked: Toolbelt
+  keeps its value in your Mac's Keychain. The lock button switches it before a value is saved.
 
 **Test** checks that it starts and opens a session; **Use** does the same and then switches to
 it. Unsaved edits stay a draft until you save or discard them, and you can add several custom
@@ -20,13 +21,17 @@ accepts them but doesn't pass them to its model answers without any Toolbelt too
 
 ## A local model (for example oMLX)
 
+The simplest and fastest way is the built-in **Model API** agent: choose the server and a model,
+and it does the rest ([Local models](local-models.md#model-api)). The agents below work too, for
+those who prefer an agent they already use.
+
 Local inference servers such as oMLX, LM Studio, Ollama or llama.cpp expose an OpenAI-compatible
 API (`http://localhost:<port>/v1`), and some (oMLX among them) also Anthropic's Messages API. Use
 a model that handles tool calls well; small models often don't call tools at all and answer from
 nothing.
 
 **Claude Code** suits a server that speaks the Messages API: open **Claude Code** in the agents
-list and fill in its **Environment**. [Local models](local-models.md) has the lines, including
+list and fill in its **Environment**. [Local models](local-models.md) has the variables, including
 the ones that keep everything on your Mac, and how to set up the server and what to expect.
 
 Use the built-in Claude Code rather than adding `claude-agent-acp` as a custom agent: a custom

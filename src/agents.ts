@@ -1,13 +1,14 @@
-// Which agents the chat can start and how to find them. Each is an ACP agent the person installed
-// (the plugin never downloads code): Claude Code's and Codex's ACP adapters, Gemini CLI's ACP mode,
-// or any command that speaks ACP. ToolBelt starts plugins with a minimal PATH (an app launched
+// Which agents the chat can start and how to find them. Each is an ACP agent: the plugin's own
+// Model API agent (bundled as model-api.js), or one the person installed (the plugin never
+// downloads code): Claude Code's and Codex's ACP adapters, Gemini CLI's ACP mode, or any command
+// that speaks ACP. ToolBelt starts plugins with a minimal PATH (an app launched
 // from the Dock doesn't see the shell's), so commands are looked up in the person's login-shell
 // PATH and the usual install folders.
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-export type AgentId = "claude" | "codex" | "gemini" | "custom";
+export type AgentId = "model-api" | "claude" | "codex" | "gemini" | "custom";
 
 export type AgentKind = {
 	id: Exclude<AgentId, "custom">;
@@ -21,11 +22,23 @@ export type AgentKind = {
 	note: string;
 	/** A lucide icon for its row in the settings. */
 	icon: string;
-	/** Takes environment lines from its setup (another model or server), and how the field reads. */
-	env?: { placeholder: string; description: string };
+	/** Takes environment variables from its setup (another model or server), and how the field reads. */
+	env?: { description: string };
+	/** The plugin's own agent: always there, started with ToolBelt's Bun (see `modelApiCommand`). */
+	bundled?: true;
 };
 
 export const AGENTS: AgentKind[] = [
+	{
+		id: "model-api",
+		name: "Model API",
+		command: "model-api.js",
+		args: [],
+		install: "",
+		note: "ToolBelt's own lightweight agent, for any model server: on this Mac (oMLX, Ollama…) or hosted (OpenRouter, OpenAI…).",
+		icon: "cpu",
+		bundled: true,
+	},
 	{
 		id: "claude",
 		name: "Claude Code",
@@ -35,8 +48,7 @@ export const AGENTS: AgentKind[] = [
 		note: "Uses your Claude Code login: run `claude` once and log in.",
 		icon: "asterisk",
 		env: {
-			placeholder: "ANTHROPIC_BASE_URL=http://localhost:8000\nANTHROPIC_MODEL=my-local-model",
-			description: "NAME=value lines for Claude Code's environment, to use another model or server (such as a local one) instead of your Claude login. Leave empty for your login.",
+			description: "Variables for Claude Code's environment, to use another model or server (such as a local one) instead of your Claude login. Leave empty for your login. Values with the lock are kept in your Mac's Keychain.",
 		},
 	},
 	{
@@ -165,15 +177,23 @@ export type Resolved =
 	| { ok: true; id: AgentId; name: string; command: string[]; env: Record<string, string> }
 	| { ok: false; id: AgentId; name: string; reason: string; install?: string };
 
-/** The command to start the chosen agent with, or why it can't start. */
-export function resolveAgent(settings: { agent: AgentId; customName?: string; customCommand?: string; customEnv?: string; env?: string }, path: string): Resolved {
+/**
+ * The Model API agent's command: ToolBelt's Bun running the bundled model-api.js beside the
+ * plugin's index.js (from source, the agent's main.ts).
+ */
+export function modelApiCommand(dir = import.meta.dir): string[] {
+	const built = join(dir, "model-api.js");
+	return [process.execPath, existsSync(built) ? built : join(dir, "model-api", "main.ts")];
+}
+
+/** The command to start the chosen agent with (its environment already read), or why it can't start. */
+export function resolveAgent(settings: { agent: AgentId; customName?: string; customCommand?: string; env?: Record<string, string> }, path: string): Resolved {
 	const name = agentName(settings.agent, settings.customName);
+	const env = settings.env ?? {};
 	if (settings.agent === "custom") {
 		let words: string[];
-		let env: Record<string, string>;
 		try {
 			words = splitCommand(settings.customCommand ?? "");
-			env = parseEnv(settings.customEnv ?? "");
 		} catch (e) {
 			return { ok: false, id: "custom", name, reason: (e as Error).message };
 		}
@@ -183,12 +203,7 @@ export function resolveAgent(settings: { agent: AgentId; customName?: string; cu
 		return { ok: true, id: "custom", name, command: [found, ...words.slice(1)], env };
 	}
 	const kind = AGENTS.find((a) => a.id === settings.agent)!;
-	let env: Record<string, string> = {};
-	try {
-		if (kind.env) env = parseEnv(settings.env ?? "");
-	} catch (e) {
-		return { ok: false, id: kind.id, name, reason: (e as Error).message };
-	}
+	if (kind.bundled) return { ok: true, id: kind.id, name, command: modelApiCommand(), env };
 	const found = which(kind.command, path);
 	if (!found) return { ok: false, id: kind.id, name, reason: `${kind.name}'s ACP mode isn't installed.`, install: kind.install };
 	return { ok: true, id: kind.id, name, command: [found, ...kind.args], env };

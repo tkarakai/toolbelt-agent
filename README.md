@@ -12,14 +12,15 @@ behind it, so you keep working while you talk to the agent.
 
 1. In Toolbelt's plugin manager, enter `tkarakai/toolbelt-agent`, review the release and publisher,
    and approve execution. Plugin code runs with your user privileges; process isolation is not a
-   security sandbox. Requires Toolbelt 0.7.1 or later.
+   security sandbox. Requires Toolbelt 0.8.0 or later.
 2. Turn on **Settings → Agents → Let agents use ToolBelt**, and choose there which plugins agents
    may read.
 3. Press **⌘K** (or click **Agent** at the bottom of the sidebar). The first time, the window opens
-   on its list of agents: pick one and **Use** it. It runs on your Mac with your own login:
+   on its list of agents: pick one and **Use** it:
 
    | Agent | Install its ACP mode | Log in |
    | --- | --- | --- |
+   | Model API | built in: choose a server (oMLX, Ollama, OpenRouter, OpenAI…) and a model | the server's API key, if it has one (kept in your Mac's Keychain) |
    | Claude Code | `npm install -g @agentclientprotocol/claude-agent-acp` | run `claude` once and log in |
    | Codex | `npm install -g @agentclientprotocol/codex-acp` | `codex login` |
    | Gemini CLI | `npm install -g @google/gemini-cli` (ACP mode is `gemini --acp`) | run `gemini` once |
@@ -27,11 +28,11 @@ behind it, so you keep working while you talk to the agent.
 
    Each agent keeps its own setup, so you can switch between them from the gear button. Toolbelt
    switches only once the new agent has started; if it doesn't, you keep the one you had. **Test**
-   starts an agent and connects it to Toolbelt without asking anything. Claude Code's setup takes
-   environment lines, to use a local model (such as oMLX) instead of your login. Other agents and local
-   models (add as many custom ACP agents as you like):
-   [docs/other-agents.md](docs/other-agents.md); [docs/local-models.md](docs/local-models.md) covers
-   local models: setups, server settings and what to expect.
+   starts an agent and connects it to Toolbelt (Model API also asks the model one small question
+   with a tool). Claude Code's setup takes environment variables, to use a local model instead of
+   your login; secret ones are kept in the Keychain. [docs/local-models.md](docs/local-models.md)
+   covers Model API and local models: setups, server settings and what to expect; other agents
+   (add as many custom ACP agents as you like): [docs/other-agents.md](docs/other-agents.md).
 4. Ask. The bar grows into a chat. The agent reads screens on its own; the first time it wants to
    change what you see (say, filter OnTrack to overdue tasks), Toolbelt asks you, and its "Shown by"
    note offers Restore.

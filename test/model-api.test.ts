@@ -242,3 +242,27 @@ describe.each(["source", "bundle"])("the agent process (%s)", (kind) => {
 		await reader;
 	});
 });
+
+describe("probe (the settings' Test)", () => {
+	test.each(["chat", "responses", "messages"] as const)("over %s: the model called a tool", async (api) => {
+		const fake = fakeModelServer();
+		cleanup.push(fake.stop);
+		const c = client(env(fake.url, { [ENV.api]: api }));
+		await c.request("initialize", { protocolVersion: 1 });
+		const probe = await c.request("_toolbelt/probe", {});
+		expect(probe).toMatchObject({ ok: true });
+		expect(probe.text).toContain("called a tool");
+		expect(JSON.stringify(fake.seen.at(-1)!.body)).toContain("ping");
+	});
+
+	test("a model that answers without tools, and a refused key", async () => {
+		const quiet = fakeModelServer({ noTools: true });
+		cleanup.push(quiet.stop);
+		expect(await client(env(quiet.url)).request("_toolbelt/probe", {})).toMatchObject({ ok: false, reason: "tools" });
+		const refused = fakeModelServer({ fail: 401 });
+		cleanup.push(refused.stop);
+		const r = await client(env(refused.url)).request("_toolbelt/probe", {});
+		expect(r).toMatchObject({ ok: false, reason: "server" });
+		expect(r.text).toMatch(/refused the API key/);
+	});
+});

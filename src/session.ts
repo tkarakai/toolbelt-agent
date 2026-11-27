@@ -44,6 +44,8 @@ export class AgentSession {
 	problem: Problem | null = null;
 	/** The agent's name once it started ("Claude Code"). */
 	agentName: string | null = null;
+	/** The agent last started (its kind: `model-api`, `claude`, …, or `custom`). */
+	agentId: string | null = null;
 	private client: AcpClient | null = null;
 	private sessionId: string | null = null;
 	private told = false;
@@ -97,8 +99,13 @@ export class AgentSession {
 		this.close();
 		this.problem = null;
 		try {
-			const { info } = await this.connectWithInfo();
-			return `${info?.title ?? info?.name ?? this.agentName} ${info?.version ?? ""} started and connected to ToolBelt.`.replace(/\s+/g, " ").trim();
+			const { client, info } = await this.connectWithInfo();
+			const started = `${info?.title ?? info?.name ?? this.agentName} ${info?.version ?? ""} started and connected to ToolBelt.`.replace(/\s+/g, " ").trim();
+			if (this.agentId !== "model-api") return started;
+			// The Model API agent also asks the model one small question with a tool.
+			const probe = await client.ext<{ ok: boolean; text: string; reason?: string }>("_toolbelt/probe", {});
+			if (!probe.ok) throw Object.assign(new Error(probe.text), { guide: probe.reason ?? "server" });
+			return `${started} ${probe.text}`;
 		} finally {
 			this.close();
 		}
@@ -162,6 +169,7 @@ export class AgentSession {
 		this.close();
 		const agent = await this.o.resolve();
 		this.agentName = agent.name;
+		this.agentId = agent.id;
 		if (!agent.ok) {
 			this.problem = { text: agent.reason, install: agent.install, settings: true };
 			throw new Error(agent.reason);

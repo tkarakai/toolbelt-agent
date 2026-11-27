@@ -2,20 +2,23 @@
 // another) about the person's tools, through ToolBelt's own MCP server.
 import { join } from "node:path";
 import { agentCommand, dataDir, definePlugin, type Context } from "@toolbelt/sdk";
-import { AGENTS, searchPath, which } from "./agents";
-import { connection, resolveConnection } from "./connections";
+import { AGENTS, modelApiCommand, searchPath, which } from "./agents";
+import { connection, resolveConnection, type Draft } from "./connections";
+import { listModels, preset, readConfig, type Api } from "./model-api/config";
 import { AgentSession, type SessionOptions } from "./session";
-import { customId, exists, findCustom, isCustom, loadSettings, saveSettings, type BuiltInId, type ConnectionId, type CustomAgent, type Settings } from "./settings";
+import { customId, exists, findCustom, isCustom, loadSettings, MODEL_API_DEFAULTS, MODEL_API_KEY, SECRET_KEY, saveSettings, secretPrefix, type BuiltInId, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
 import { newId, Threads, titleOf, type Keep } from "./threads";
-import { dirty, floating, SUGGESTIONS, type Page, type TestResult } from "./ui";
+import { dirty, floating, SUGGESTIONS, type ModelList, type Page, type TestResult } from "./ui";
 
 const data = dataDir();
 let settings: Settings = loadSettings(data);
 let page: Page = { view: settings.active ? "chat" : "agents" };
 let collapsed = false;
 let found: Partial<Record<string, string | null>> = {};
-/** Agents being edited: a custom agent's setup, or a built-in agent's `env` (its other fields unused). */
-const drafts = new Map<ConnectionId, CustomAgent>();
+/** Agents being edited: a custom agent's setup, a built-in agent's `vars`, or the Model API's settings. */
+const drafts = new Map<ConnectionId, Draft>();
+/** The Model API server's models, and for which server and key they were listed. */
+let models: { for: string; list: ModelList } | null = null;
 const tests: Partial<Record<ConnectionId, TestResult>> = {};
 let ctx: Context | undefined;
 const threads = new Threads(data);
@@ -34,6 +37,9 @@ const changed = () => {
 	}, 100);
 };
 
+/** Secrets ToolBelt keeps in the Keychain for the plugin. */
+const secret = async (name: string) => (ctx ? ctx.secrets.get(name) : null);
+
 const options: Omit<SessionOptions, "resolve"> = {
 	workdir: join(data, "workspace"),
 	agentCommand: agentCommand(),
@@ -45,7 +51,7 @@ const options: Omit<SessionOptions, "resolve"> = {
 /** The conversation, always with the agent in use (its saved setup, never a draft). */
 const session = new AgentSession({
 	...options,
-	resolve: async () => resolveConnection(connection(settings, settings.active ?? "claude")!, await searchPath()),
+	resolve: async () => resolveConnection(connection(settings, settings.active ?? "claude")!, await searchPath(), secret, data),
 	agentKey: () => settings.active,
 });
 
@@ -114,7 +120,7 @@ const rowId = (payload: unknown) => String((payload as { rowId?: string; item?: 
 /** Where each built-in agent's command is, for the settings. */
 async function detect() {
 	const path = await searchPath();
-	found = Object.fromEntries(AGENTS.map((a) => [a.id, which(a.command, path)]));
+	found = Object.fromEntries(AGENTS.map((a) => [a.id, a.bundled ? modelApiCommand()[1]! : which(a.command, path)]));
 	ctx?.invalidate("floating");
 }
 
@@ -132,13 +138,14 @@ async function start(id: ConnectionId, use: boolean): Promise<boolean> {
 	if (!c || tests[id]?.state === "running") return false;
 	tests[id] = { state: "running", use };
 	ctx?.invalidate("floating");
-	const probe = new AgentSession({ ...options, changed: () => {}, resolve: async () => resolveConnection(c, await searchPath()) });
+	const probe = new AgentSession({ ...options, changed: () => {}, resolve: async () => resolveConnection(c, await searchPath(), secret, data) });
 	let ok = false;
 	try {
 		tests[id] = { state: "ok", text: await probe.check() };
 		ok = true;
 	} catch (e) {
-		tests[id] = { state: "failed", text: probe.problem?.text ?? (e as Error).message };
+		const guide = (e as { guide?: string }).guide;
+		tests[id] = { state: "failed", text: probe.problem?.text ?? (e as Error).message, ...(guide ? { guide } : {}) };
 	}
 	// What's remembered is about the saved setup, so a failed draft doesn't mark the saved one.
 	if (!dirty({ settings, drafts }, id) || ok) save({ ...settings, tested: { ...settings.tested, [id]: { ok, at: Date.now(), text: (tests[id] as { text: string }).text } } });
@@ -150,8 +157,10 @@ function commit(id: ConnectionId) {
 	const d = drafts.get(id);
 	if (!d) return;
 	drafts.delete(id);
-	if (!isCustom(id)) return save({ ...settings, env: { ...settings.env, [id]: d.env } });
-	const custom = findCustom(settings, id) ? settings.custom.map((c) => (customId(c.id) === id ? d : c)) : [...settings.custom, d];
+	if (d.modelApi) return save({ ...settings, modelApi: d.modelApi });
+	if (!isCustom(id)) return save({ ...settings, vars: { ...settings.vars, [id]: d.vars } });
+	const agent = { id: d.id, name: d.name, command: d.command, vars: d.vars };
+	const custom = findCustom(settings, id) ? settings.custom.map((c) => (customId(c.id) === id ? agent : c)) : [...settings.custom, agent];
 	save({ ...settings, custom });
 }
 
@@ -177,7 +186,7 @@ function newCustom(): ConnectionId {
 	let n = 1;
 	while (findCustom(settings, customId(String(n))) || drafts.has(customId(String(n)))) n++;
 	const id = customId(String(n));
-	drafts.set(id, { id: String(n), name: "", command: "", env: "" });
+	drafts.set(id, { id: String(n), name: "", command: "", vars: [] });
 	return id;
 }
 
@@ -188,10 +197,76 @@ const target = (payload: unknown): ConnectionId | null => {
 	return page.view === "agent" ? page.id : null;
 };
 
+/** Variables from an `environment` field's event: ToolBelt already kept secret values in the Keychain. */
+const varsFrom = (value: unknown): Var[] =>
+	(Array.isArray(value) ? value : []).map((v: Partial<Var>) => ({ key: String(v.key ?? ""), value: v.secret ? "" : String(v.value ?? ""), selected: v.selected !== false, secret: v.secret === true }));
+
+/** The Model API settings being edited (or saved). */
+const modelApiDraft = (): ModelApiSettings => drafts.get("model-api")?.modelApi ?? settings.modelApi;
+
+/** Lists the Model API server's models for the model field (again when the server or key changed). */
+async function refreshModels(force = false) {
+	const m = modelApiDraft();
+	const p = preset(m.preset);
+	const url = (m.url.trim() || p.url).replace(/\/+$/, "");
+	const key = (await secret(MODEL_API_KEY).catch(() => null)) ?? "";
+	const api = (m.api === "auto" || !m.api ? undefined : m.api) as Api | undefined;
+	const id = `${p.id}|${url}|${api ?? "auto"}|${key.length}`;
+	if (!url || (!force && models?.for === id && models.list.state !== "failed")) return;
+	models = { for: id, list: { state: "loading" } };
+	ctx?.invalidate("floating");
+	let list: ModelList;
+	try {
+		const config = readConfig({ TOOLBELT_MODEL_API_PRESET: p.id, TOOLBELT_MODEL_API_URL: url, TOOLBELT_MODEL_API_MODEL: "x", ...(api ? { TOOLBELT_MODEL_API_API: api } : {}) });
+		list = { state: "ok", list: await listModels({ url: config.url, api: config.api, key }) };
+	} catch (e) {
+		list = { state: "failed", text: (e as Error).message };
+	}
+	if (models?.for === id) models = { for: id, list };
+	ctx?.invalidate("floating");
+}
+
+/**
+ * Moves secret-looking variables that still have a value here (from an older version's lines)
+ * into the Keychain, once, and says so.
+ */
+async function toKeychain(c: Context) {
+	const moved: string[] = [];
+	const move = async (id: ConnectionId, vars: Var[]): Promise<Var[]> => {
+		const out: Var[] = [];
+		for (const v of vars) {
+			if (v.value && (v.secret || SECRET_KEY.test(v.key)) && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v.key)) {
+				try {
+					await c.secrets.set(`${secretPrefix(id)}/${v.key}`, v.value);
+					out.push({ ...v, value: "", secret: true });
+					moved.push(v.key);
+					continue;
+				} catch (e) {
+					console.error(`[agent] couldn't move ${v.key} into the Keychain: ${(e as Error).message}`);
+				}
+			}
+			out.push(v);
+		}
+		return out;
+	};
+	const vars: Settings["vars"] = {};
+	for (const [id, v] of Object.entries(settings.vars)) vars[id as BuiltInId] = await move(id as ConnectionId, v ?? []);
+	const custom = [];
+	for (const a of settings.custom) custom.push({ ...a, vars: await move(customId(a.id), a.vars) });
+	if (!moved.length) return;
+	save({ ...settings, vars, custom });
+	const names = [...new Set(moved)].join(", ");
+	session.chat.system(`Moved ${names} into your Mac's Keychain. ToolBelt keeps ${moved.length === 1 ? "it" : "them"} there now, not in the plugin's settings.`);
+	c.toast(`Moved ${names} into your Mac's Keychain`, "success");
+}
+
 definePlugin({
 	async start(c) {
 		ctx = c;
-		if (c.mode === "active") void detect();
+		if (c.mode === "active") {
+			void detect();
+			await toKeychain(c).catch((e) => console.error(`[agent] ${(e as Error).message}`));
+		}
 	},
 	stop() {
 		session.close();
@@ -208,6 +283,7 @@ definePlugin({
 				lastAnswer: session.chat.lastAnswer(),
 				found,
 				drafts,
+				models: models?.list ?? null,
 				tests,
 				threads: threads.list(),
 				thread,
@@ -260,19 +336,33 @@ definePlugin({
 			const item = String((payload as { item?: string })?.item ?? "");
 			if (item === "add") page = { view: "agent", id: newCustom() };
 			else if (exists(settings, item) || drafts.has(item as ConnectionId)) page = { view: "agent", id: item as ConnectionId };
+			if (item === "model-api") void refreshModels();
 		} else if (name === "field" && page.view === "agent" && isCustom(page.id)) {
 			const { field, value } = payload as { field: string; value: unknown };
 			const id = page.id;
 			const base = drafts.get(id) ?? findCustom(settings, id);
-			if (base && (field === "name" || field === "command" || field === "env")) {
-				drafts.set(id, { ...base, [field]: String(value ?? "") });
-				delete tests[id];
+			if (base && (field === "name" || field === "command")) drafts.set(id, { ...base, [field]: String(value ?? "") });
+			else if (base && field === "env") drafts.set(id, { ...base, vars: varsFrom(value) });
+			delete tests[id];
+		} else if (name === "field" && page.view === "agent" && page.id === "model-api") {
+			const { form, field, value } = payload as { form: string; field: string; value: unknown };
+			if (field === "key" && form === "model-api") {
+				// ToolBelt saved or removed the key in the Keychain: the server may list other models.
+				delete tests["model-api"];
+				void refreshModels(true);
+			} else if ((form === "model-api" || form === "model-api-advanced") && field in MODEL_API_DEFAULTS) {
+				const next = { ...modelApiDraft(), [field]: String(value ?? "") };
+				// Another server: its own usual address.
+				if (field === "preset") next.url = "";
+				drafts.set("model-api", { id: "model-api", name: "", command: "", vars: [], modelApi: next });
+				delete tests["model-api"];
+				if (field === "preset" || field === "url" || field === "api") void refreshModels();
 			}
 		} else if (name === "field" && page.view === "agent") {
 			const { field, value } = payload as { field: string; value: unknown };
 			const id = page.id as BuiltInId;
 			if (field === "env" && AGENTS.some((a) => a.id === id && a.env)) {
-				drafts.set(id, { id, name: "", command: "", env: String(value ?? "") });
+				drafts.set(id, { id, name: "", command: "", vars: varsFrom(value) });
 				delete tests[id];
 			}
 		} else if (name === "discard") {

@@ -13,7 +13,7 @@ function hasToolResult(body: any): boolean {
 	return /"role":"tool"|function_call_output|"tool_result"/.test(text);
 }
 
-export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: number } = {}) {
+export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: number; noTools?: boolean } = {}) {
 	const seen: Seen[] = [];
 	const answer = o.answer ?? "You have 2 tasks due today.";
 	const server = Bun.serve({
@@ -27,7 +27,7 @@ export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: n
 			if (o.fail) return new Response(JSON.stringify({ error: { message: "nope" } }), { status: o.fail, headers: { "content-type": "application/json" } });
 			if (url.pathname.endsWith("/models")) return Response.json({ data: [{ id: "small", context_length: 65536 }, { id: "big" }] });
 			const stream = (text: string) => new Response(text, { headers: { "content-type": "text/event-stream" } });
-			const done = hasToolResult(body);
+			const done = o.noTools || hasToolResult(body);
 			if (url.pathname.endsWith("/chat/completions")) {
 				const base = { id: "c1", object: "chat.completion.chunk", created: 1, model: body.model };
 				return stream(

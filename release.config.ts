@@ -1,7 +1,7 @@
 import { json, packagePlugin, run, updateJSONVersion, type ReleaseConfig } from "@toolbelt/sdk/release";
 
 /** The Toolbelt version packages are checked against: the minimum this plugin requires. */
-const HOST_VERSION = "0.7.1";
+const HOST_VERSION = "0.8.0";
 
 export default {
 	repo: "tkarakai/toolbelt-agent",
