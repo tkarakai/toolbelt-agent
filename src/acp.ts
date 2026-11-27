@@ -3,7 +3,8 @@
 // are refused), forwards `session/update` notifications and asks its owner about
 // `session/request_permission`. https://agentclientprotocol.com
 //
-// Only what the chat needs is here: initialize, session/new, session/prompt and session/cancel.
+// Only what the chat needs is here: initialize, session/new, session/load, session/prompt and
+// session/cancel.
 
 export const PROTOCOL_VERSION = 1;
 
@@ -92,6 +93,12 @@ export class AcpClient {
 
 	newSession(cwd: string, mcpServers: McpServer[], meta?: Record<string, unknown>) {
 		return this.request<{ sessionId: string }>("session/new", { cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
+	}
+
+	/** Reopens an earlier session (only when the agent offers `loadSession`). The agent replays its
+	 *  history as `session/update`s before answering. */
+	loadSession(sessionId: string, cwd: string, mcpServers: McpServer[], meta?: Record<string, unknown>) {
+		return this.request<unknown>("session/load", { sessionId, cwd, mcpServers, ...(meta ? { _meta: meta } : {}) });
 	}
 
 	prompt(sessionId: string, prompt: ContentBlock[]) {

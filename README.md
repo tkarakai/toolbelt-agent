@@ -12,11 +12,11 @@ behind it, so you keep working while you talk to the agent.
 
 1. In Toolbelt's plugin manager, enter `tkarakai/toolbelt-agent`, review the release and publisher,
    and approve execution. Plugin code runs with your user privileges; process isolation is not a
-   security sandbox. Requires Toolbelt 0.7.0 or later.
+   security sandbox. Requires Toolbelt 0.7.1 or later.
 2. Turn on **Settings → Agents → Let agents use ToolBelt**, and choose there which plugins agents
    may read.
 3. Press **⌘K** (or click **Agent** at the bottom of the sidebar). The first time, the window opens
-   on its settings: pick an agent. It runs on your Mac with your own login:
+   on its list of agents: pick one and **Use** it. It runs on your Mac with your own login:
 
    | Agent | Install its ACP mode | Log in |
    | --- | --- | --- |
@@ -25,14 +25,19 @@ behind it, so you keep working while you talk to the agent.
    | Gemini CLI | `npm install -g @google/gemini-cli` (ACP mode is `gemini --acp`) | run `gemini` once |
    | Another ACP agent | its own instructions | — |
 
-   **Test connection** starts the agent and connects it to Toolbelt without asking anything.
-   Other agents and local models: [docs/other-agents.md](docs/other-agents.md).
+   Each agent keeps its own setup, so you can switch between them from the gear button. Toolbelt
+   switches only once the new agent has started; if it doesn't, you keep the one you had. **Test**
+   starts an agent and connects it to Toolbelt without asking anything. Other agents and local
+   models (add as many custom ACP agents as you like):
+   [docs/other-agents.md](docs/other-agents.md).
 4. Ask. The bar grows into a chat. The agent reads screens on its own; the first time it wants to
    change what you see (say, filter OnTrack to overdue tasks), Toolbelt asks you, and its "Shown by"
    note offers Restore.
 
 In the window: **↵** asks, **esc** minimizes it into the sidebar, the title bar's buttons start a
-new chat, fold it back into the ask bar, stop an answer and open the settings. Click its sidebar
+new chat, open your saved chats, fold it back into the ask bar, stop an answer and open the
+settings. Chats are saved on this Mac (for 30 days since last used, unless you choose otherwise or
+pin them); open one to continue it, or pick a recent one under **Continue** in the ask bar. Click its sidebar
 item or press ⌘K to bring it back where it was; when it's in front, the same minimizes it. The
 item spins while the agent works and shows a dot when it answers while minimized.
 

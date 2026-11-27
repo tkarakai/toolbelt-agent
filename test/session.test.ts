@@ -104,3 +104,33 @@ test("Test connection starts the agent and its session, and closes them", async 
 	expect(agent.closed).toBe(true);
 	expect(agent.sent.some((m) => m.method === "session/prompt")).toBe(false);
 });
+
+const saved = [
+	{ role: "user" as const, text: "What's overdue?" },
+	{ role: "assistant" as const, text: "Three tasks." },
+];
+
+test("a saved chat with the same agent reopens its session, without repeating its history", async () => {
+	const prompts: any[] = [];
+	const { s, agent } = session(async (_a, _id, prompt) => void prompts.push(prompt), { agentKey: () => "claude" });
+	agent.loadable = [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Three tasks." } }];
+	s.restore(saved, { sessionId: "old-1", agent: "claude" });
+	await s.ask("And tomorrow?");
+	expect(agent.loadSession).toMatchObject({ sessionId: "old-1", _meta: CLAUDE_ISOLATION });
+	expect(agent.newSession).toBeNull();
+	expect(prompts[0]).toEqual([{ type: "text", text: "And tomorrow?" }]);
+	expect(s.chat.messages.map((m) => m.text)).toEqual(["What's overdue?", "Three tasks.", "And tomorrow?"]);
+	expect(s.session).toEqual({ id: "old-1", agent: "claude" });
+});
+
+test("another agent (or one that can't reopen sessions) gets a recap in a new session", async () => {
+	const prompts: any[] = [];
+	const { s, agent } = session(async (_a, _id, prompt) => void prompts.push(prompt), { agentKey: () => "codex" });
+	agent.loadable = [];
+	s.restore(saved, { sessionId: "old-1", agent: "claude" });
+	await s.ask("And tomorrow?");
+	expect(agent.loadSession).toBeNull();
+	expect(prompts[0].map((p: any) => p.text)).toEqual([PREAMBLE, expect.stringContaining("Person: What's overdue?\n\nYou: Three tasks."), "And tomorrow?"]);
+	expect(s.chat.messages.map((m) => m.role)).toEqual(["user", "assistant", "system", "user"]);
+	expect(s.session).toEqual({ id: "s1", agent: "codex" });
+});

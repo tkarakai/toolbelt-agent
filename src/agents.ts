@@ -19,6 +19,8 @@ export type AgentKind = {
 	install: string;
 	/** What else it needs (a login). */
 	note: string;
+	/** A lucide icon for its row in the settings. */
+	icon: string;
 };
 
 export const AGENTS: AgentKind[] = [
@@ -29,6 +31,7 @@ export const AGENTS: AgentKind[] = [
 		args: [],
 		install: "npm install -g @agentclientprotocol/claude-agent-acp",
 		note: "Uses your Claude Code login: run `claude` once and log in.",
+		icon: "asterisk",
 	},
 	{
 		id: "codex",
@@ -37,6 +40,7 @@ export const AGENTS: AgentKind[] = [
 		args: [],
 		install: "npm install -g @agentclientprotocol/codex-acp",
 		note: "Uses your Codex login: run `codex login` once.",
+		icon: "code-xml",
 	},
 	{
 		id: "gemini",
@@ -45,6 +49,7 @@ export const AGENTS: AgentKind[] = [
 		args: ["--acp"],
 		install: "npm install -g @google/gemini-cli",
 		note: "Uses your Gemini CLI login: run `gemini` once and sign in.",
+		icon: "gem",
 	},
 ];
 
