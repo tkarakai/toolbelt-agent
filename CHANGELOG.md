@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.2.0 — 2026-11-27
 - Requires Toolbelt 0.7.1 (SDK 0.5.1): its floating windows scroll long settings and lists, and its ask bar shows the Continue and Try asking headings.
 - **Chats are saved, and you can pick them up again.** The clock button opens your chats, grouped by when you last used them, with search, Rename, Pin and Delete. Opening one continues it: Claude Code reopens its own session, so it remembers everything. An agent that can't do that (or a different agent than the chat was with) starts a new session that's given a summary of the conversation, and the chat says so.
 - **Continue from the ask bar.** ⌘K shows your three most recent chats under Continue, above the questions to try. Turn them off in the agents settings (say, while you share your screen).
