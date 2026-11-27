@@ -77,7 +77,7 @@ export class AgentSession {
 		}
 	}
 
-	/** Starts the agent and its session without asking anything: what "Test connection" does. */
+	/** Starts the agent and its session without asking anything: what Test does, and Use before it switches. */
 	async check(): Promise<string> {
 		this.close();
 		this.problem = null;

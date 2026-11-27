@@ -14,10 +14,14 @@ prefixed `[agent]`). The manifest declares `floating` (shortcut K), no screens, 
 
 The only surface is `floating`. `src/ui.ts` renders it as a pure function of the state:
 
-- **Settings** (`mode: "panel"`, subtitle Settings) when no agent is chosen yet or the gear was
-  pressed: a form (`settings`: `agent`, and for a custom agent `customName`, `customCommand`,
-  `customEnv`), where the chosen agent was found or how to install it, a Connection card whose
-  `test` action runs `AgentSession.check()`, and what the agent can see. Done is `done`.
+- **Agents** (`mode: "panel"`, subtitle Agents) on first run and from the gear (`settings`): a
+  `list` (`agents`) of every agent (`connections.ts`: the built-in ones, then custom ones), each
+  with its install state or last start, "In use" on the active one, an inline `use` and, for
+  inactive custom agents, `delete` (confirmed); its `open-agent` opens an agent's page, and the
+  last row (`add`) a new custom agent. Done (`done`) once an agent is in use.
+- **An agent's page** (subtitle its name, `back`): a built-in agent's install state and login
+  note, or a custom agent's form (`agent`: `name`, `command`, `env`), and a card (`connection`)
+  with `test`, `discard`, `save` and `use` ("Use X", or Save for the agent in use).
 - **Ask bar** (`mode: "bar"`) while the chat is empty or folded back (`collapsed`): suggestions
   (`suggest:*`, sent as questions), the composer (`ask`), and when folded back the last answer's
   first line and `expand`.
@@ -77,17 +81,38 @@ turn, tool calls into tool rows that update in place (named without the `mcp__to
 with their input and output as details, capped at 4,000 characters). Thoughts, plans and usage
 aren't shown.
 
+## Settings and switching
+
+`src/settings.ts` keeps every agent's setup: `active` (a built-in id or `custom:<id>`), `custom`
+(`id`, `name`, `command`, `env`) and `tested` (each agent's last start from the settings: `ok`,
+`at`, `text`). The agent in use is always one that worked: `use` first starts the agent as it's
+set up (a custom agent's draft) in a separate `AgentSession` whose `check()` opens a session
+without prompting, then saves the draft, makes it active and closes the conversation's agent so
+the next question starts the new one. If the start fails, nothing is saved and the active agent
+stays. `test` does the same start without switching. Starting from the settings never touches the
+conversation's own agent process.
+
+Edits to a custom agent go to an in-memory draft (`drafts`) until `save`, `use` or `discard`; the
+list says "Unsaved changes" meanwhile. A draft's failed start isn't remembered as the saved
+setup's result. New custom agents exist only as drafts until saved. The agent in use can't be
+deleted.
+
 ## Data
 
-The stable plugin id is `agent`. Data schema 1: `settings.json` in the data folder (`agent`,
-`customName`, `customCommand`, `customEnv`), written atomically; unknown or missing values fall back
-to the defaults. `workspace/` is the agents' working folder.
+The stable plugin id is `agent`. Data schema 1: `settings.json` in the data folder, written
+atomically: `active`, `custom` and `tested`, plus the first version's `agent`, `customName`,
+`customCommand` and `customEnv` mirrored from the agent in use, so older versions still read it.
+The first version's file (only those fields) loads as one active agent (a custom one becomes
+`custom:1`). Unknown agents, malformed ids and results for missing agents are dropped.
+`workspace/` is the agents' working folder.
 
 ## Tests
 
 `test/fake-agent.ts` is an in-memory ACP agent with scripted turns. Tests cover the client
 (capabilities offered, refused methods, permission answers, errors, a vanishing agent), the chat
 model, agent lookup and command parsing, the session (MCP server and isolation, the preamble,
-refused tools, problems, stop, Test connection) and every view, validated against the SDK's tree
-schema. `scripts/verify-package.ts` runs the built archive like Toolbelt does: first-run settings,
-choosing an agent, the ask bar, prepare and shutdown, without starting an agent.
+refused tools, problems, stop, test starts) and every view, validated against the SDK's tree
+schema, and settings loading (the first version's file, bad values, the mirrored fields).
+`scripts/verify-package.ts` runs the built archive like Toolbelt does: the first-run agents list,
+adding a custom agent and switching to it (a tiny stdio ACP agent that only opens sessions), the
+ask bar, prepare and shutdown.

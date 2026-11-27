@@ -2,7 +2,7 @@
 
 The Agent plugin talks to any agent that speaks the
 [Agent Client Protocol](https://agentclientprotocol.com) (ACP) on stdin and stdout and accepts
-the MCP servers its client gives it. Pick **Another ACP agent…** in the settings and enter:
+the MCP servers its client gives it. In the agents list, choose **Add an ACP agent…** and enter:
 
 - **Command**: the command that starts the agent in ACP mode, for example `my-agent --acp`. It's
   split into words the way a shell would (quotes group, backslash escapes) but no shell runs it, so
@@ -11,7 +11,9 @@ the MCP servers its client gives it. Pick **Another ACP agent…** in the settin
 - **Environment**: `NAME=value` lines added to the agent's environment, such as a local server's
   address. Lines starting with `#` are ignored.
 
-**Test connection** checks that it starts and opens a session.
+**Test** checks that it starts and opens a session; **Use** does the same and then switches to
+it. Unsaved edits stay a draft until you save or discard them, and you can add several custom
+agents (say, one per local model) and switch between them.
 
 The agent must use the MCP servers it's given: that's how it reaches Toolbelt. An adapter that
 accepts them but doesn't pass them to its model answers without any Toolbelt tools.
@@ -41,7 +43,7 @@ model that handles tool calls well; small models often don't call tools at all a
 nothing.
 
 **Claude Code** works too when the local server speaks Anthropic's Messages API (or through a
-proxy that translates it): choose **Another ACP agent…** with the command `claude-agent-acp` and
+proxy that translates it): add an ACP agent with the command `claude-agent-acp` and
 the environment line `ANTHROPIC_BASE_URL=http://localhost:<port>`.
 
 ## pi

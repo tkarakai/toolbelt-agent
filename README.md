@@ -16,7 +16,7 @@ behind it, so you keep working while you talk to the agent.
 2. Turn on **Settings → Agents → Let agents use ToolBelt**, and choose there which plugins agents
    may read.
 3. Press **⌘K** (or click **Agent** at the bottom of the sidebar). The first time, the window opens
-   on its settings: pick an agent. It runs on your Mac with your own login:
+   on its list of agents: pick one and **Use** it. It runs on your Mac with your own login:
 
    | Agent | Install its ACP mode | Log in |
    | --- | --- | --- |
@@ -25,8 +25,11 @@ behind it, so you keep working while you talk to the agent.
    | Gemini CLI | `npm install -g @google/gemini-cli` (ACP mode is `gemini --acp`) | run `gemini` once |
    | Another ACP agent | its own instructions | — |
 
-   **Test connection** starts the agent and connects it to Toolbelt without asking anything.
-   Other agents and local models: [docs/other-agents.md](docs/other-agents.md).
+   Each agent keeps its own setup, so you can switch between them from the gear button. Toolbelt
+   switches only once the new agent has started; if it doesn't, you keep the one you had. **Test**
+   starts an agent and connects it to Toolbelt without asking anything. Other agents and local
+   models (add as many custom ACP agents as you like):
+   [docs/other-agents.md](docs/other-agents.md).
 4. Ask. The bar grows into a chat. The agent reads screens on its own; the first time it wants to
    change what you see (say, filter OnTrack to overdue tasks), Toolbelt asks you, and its "Shown by"
    note offers Restore.
