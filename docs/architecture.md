@@ -15,17 +15,18 @@ prefixed `[agent]`). The manifest declares `floating` (shortcut K), no screens, 
 
 The only surface is `floating`. `src/ui.ts` renders it as a pure function of the state:
 
-- **Agents** (`mode: "panel"`, subtitle Agents) on first run and from the gear (`settings`): a
+- **Agents** (`mode: "panel"`, subtitle "Agent settings") on first run and from the gear (`settings`): a
   `list` (`agents`) of every agent (`connections.ts`: the built-in ones, then custom ones), each
   with its install state or last start, "In use" on the active one, an inline `use` and, for
   inactive custom agents, `delete` (confirmed); its `open-agent` opens an agent's page, and the
   last row (`add`) a new custom agent. Done (`done`) once an agent is in use.
-- **An agent's page** (subtitle its name, `back`), then a card (`connection`) with `test`,
+- **An agent's page** (subtitle "<name> settings", `back`), then a card (`connection`) with `test`,
   `discard`, `save` and `use` ("Use X", or Save for the agent in use):
   - **Model API:** a card (`server`, titled with the preset, its description where chats go:
     "Stays on this Mac" or "Sends chats to <host>") with the form `model-api`: `preset`, `url`,
     `key` (a Keychain secret field, `model-api/key`; absent for presets without keys), `model`
-    (a combobox of the server's models, freeform) and `thinking`. Then two collapsible cards:
+    (a combobox of the server's models, freeform) and `thinking`, and the action
+    `refresh-models`. The models are listed afresh whenever the page opens. Then two collapsible cards:
     `advanced` (form `model-api-advanced`: `api`, `maxOutput`, `context`, `maxSteps`,
     `instructions`, `extra`) and `guide` ("Before you start": the checklist for a local or hosted
     server, the preset's own item first). A failed Test that says what went wrong (`guide`)
@@ -156,7 +157,9 @@ ignored (agents that log to stdout).
   asks for `session/set_mode` `default` (`CLAUDE_MODE`), where every tool call becomes a
   permission request (below).
 - The first prompt carries `PREAMBLE`, which tells the agent where it is and which Toolbelt tools
-  it has; follow-ups reuse the session.
+  it has; follow-ups reuse the session. Every question starts with when it was sent (`sentAt`:
+  "(Sent Friday, November 27, 2026 at 2:03 PM, Europe/Budapest.)"), since a chat can be picked up
+  again days later.
 - Permission requests are allowed (`allow_once`) only for Toolbelt's MCP tools
   (`mcp__toolbelt__<tool>` or `toolbelt.<tool>`) and refused otherwise, with a line in the chat.
   Toolbelt's own access levels and view grants still apply to the allowed ones.
@@ -184,7 +187,8 @@ The next question continues it (`AgentSession.restore`): when the agent in use i
 and offers `loadSession`, the session reopens with `session/load` (its replayed updates are
 ignored, since the messages are already shown) and the question goes as a follow-up. Otherwise a
 new session starts, and the first prompt carries the preamble and a recap of the conversation
-(`Chat.transcript`: questions and answers, newest kept within 8,000 characters, no tool output),
+(`Chat.transcript`: questions and answers with when they were written, newest kept within 8,000
+characters, no tool output),
 with a note in the chat. Deleting a chat removes only ToolBelt's copy; agents may keep their own
 session records.
 

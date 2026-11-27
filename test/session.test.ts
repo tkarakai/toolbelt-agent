@@ -2,13 +2,16 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AgentSession, CLAUDE_ISOLATION, PREAMBLE, isToolbeltTool, type SessionOptions } from "../src/session";
+import { AgentSession, CLAUDE_ISOLATION, PREAMBLE, isToolbeltTool, sentAt, type SessionOptions } from "../src/session";
 import { FakeAgent, type Turn } from "./fake-agent";
 
 const root = mkdtempSync(join(tmpdir(), "agent-session-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const socket = join(root, "agent.sock");
 writeFileSync(socket, "");
+
+const NOW = new Date(2026, 10, 27, 14, 3);
+const SENT = sentAt(NOW);
 
 function session(turn?: Turn, options: Partial<SessionOptions> = {}) {
 	const agent = new FakeAgent(turn);
@@ -22,6 +25,7 @@ function session(turn?: Turn, options: Partial<SessionOptions> = {}) {
 		changed: () => changes++,
 		transport: (command, o) => ((spawned = { command, env: o.env }), agent.transport()),
 		env: { HOME: "/Users/me", SECRET_TOKEN: "x" },
+		now: () => NOW,
 		...options,
 	});
 	return { s, agent, changes: () => changes, spawned: () => spawned };
@@ -40,13 +44,13 @@ test("the first question starts the agent with ToolBelt's MCP server only, isola
 	expect(agent.newSession.mcpServers).toEqual([{ name: "toolbelt", command: "/bun", args: ["/app/cli.js", "--socket", socket, "mcp", "--client", "Agent · Claude Code"], env: [] }]);
 	expect(agent.newSession._meta).toEqual(CLAUDE_ISOLATION);
 	expect(agent.newSession.cwd).toBe(join(root, "workspace"));
-	expect(prompts[0]).toEqual([{ type: "text", text: PREAMBLE }, { type: "text", text: "What's overdue?" }]);
+	expect(prompts[0]).toEqual([{ type: "text", text: PREAMBLE }, { type: "text", text: `${SENT}\n\nWhat's overdue?` }]);
 	expect(s.chat.messages.map((m) => m.text)).toEqual(["What's overdue?", "Three tasks."]);
 	expect(s.status).toBe("idle");
 	// Follow-ups reuse the session and skip the preamble.
 	await s.ask("And today?");
 	expect(agent.sent.filter((m) => m.method === "session/new")).toHaveLength(1);
-	expect(prompts[1]).toEqual([{ type: "text", text: "And today?" }]);
+	expect(prompts[1]).toEqual([{ type: "text", text: `${SENT}\n\nAnd today?` }]);
 });
 
 test("only ToolBelt's tools are allowed; anything else is refused and said so", async () => {
@@ -98,6 +102,10 @@ test("stop cancels the turn, and a new chat starts a fresh session", async () =>
 	expect(agent.closed).toBe(true);
 });
 
+test("every message says when it was sent", () => {
+	expect(sentAt(NOW)).toMatch(/^\(Sent Friday, November 27, 2026 at 2:03 PM, .+\.\)$/);
+});
+
 test("Test connection starts the agent and its session, and closes them", async () => {
 	const { s, agent } = session();
 	expect(await s.check()).toBe("Fake Agent 9.9 started and connected to ToolBelt.");
@@ -134,7 +142,7 @@ test("a saved chat with the same agent reopens its session, without repeating it
 	await s.ask("And tomorrow?");
 	expect(agent.loadSession).toMatchObject({ sessionId: "old-1", _meta: CLAUDE_ISOLATION });
 	expect(agent.newSession).toBeNull();
-	expect(prompts[0]).toEqual([{ type: "text", text: "And tomorrow?" }]);
+	expect(prompts[0]).toEqual([{ type: "text", text: `${SENT}\n\nAnd tomorrow?` }]);
 	expect(s.chat.messages.map((m) => m.text)).toEqual(["What's overdue?", "Three tasks.", "And tomorrow?"]);
 	expect(s.session).toEqual({ id: "old-1", agent: "claude" });
 });
@@ -146,7 +154,7 @@ test("another agent (or one that can't reopen sessions) gets a recap in a new se
 	s.restore(saved, { sessionId: "old-1", agent: "claude" });
 	await s.ask("And tomorrow?");
 	expect(agent.loadSession).toBeNull();
-	expect(prompts[0].map((p: any) => p.text)).toEqual([PREAMBLE, expect.stringContaining("Person: What's overdue?\n\nYou: Three tasks."), "And tomorrow?"]);
+	expect(prompts[0].map((p: any) => p.text)).toEqual([PREAMBLE, expect.stringContaining("Person: What's overdue?\n\nYou: Three tasks."), `${SENT}\n\nAnd tomorrow?`]);
 	expect(s.chat.messages.map((m) => m.role)).toEqual(["user", "assistant", "system", "user"]);
 	expect(s.session).toEqual({ id: "s1", agent: "codex" });
 });

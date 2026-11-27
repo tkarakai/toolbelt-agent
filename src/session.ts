@@ -36,6 +36,8 @@ export type SessionOptions = {
 	env?: Record<string, string | undefined>;
 	/** Which of the person's agents this is (its settings id), kept with saved chats. */
 	agentKey?: () => string | null;
+	/** The clock, for when messages were sent (tests pass a fixed one). */
+	now?: () => Date;
 };
 
 export class AgentSession {
@@ -78,7 +80,8 @@ export class AgentSession {
 			this.o.changed();
 			const intro = this.told ? [] : [{ type: "text", text: PREAMBLE }];
 			if (this.recap) intro.push({ type: "text", text: this.recap });
-			const prompt = [...intro, { type: "text", text: text.trim() }];
+			// Every message says when it was sent: a chat can be picked up again days later.
+			const prompt = [...intro, { type: "text", text: `${sentAt(this.o.now?.() ?? new Date())}\n\n${text.trim()}` }];
 			this.told = true;
 			this.recap = null;
 			const { stopReason } = await client.prompt(sessionId, prompt);
@@ -260,6 +263,12 @@ export class AgentSession {
 		this.o.changed();
 		return reject ? { outcome: "selected", optionId: reject.optionId } : { outcome: "cancelled" };
 	}
+}
+
+/** When a message was sent, for the agent: "(Sent Thursday, November 27, 2026 at 2:03 PM, Europe/Budapest.)" */
+export function sentAt(d: Date): string {
+	const when = d.toLocaleString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" });
+	return `(Sent ${when}, ${Intl.DateTimeFormat().resolvedOptions().timeZone}.)`;
 }
 
 /** Claude Code: no built-in tools, none of the person's Claude settings or MCP servers. */

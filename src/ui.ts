@@ -56,7 +56,7 @@ export type ViewState = {
 };
 
 const ACTIONS = {
-	settings: { id: "settings", label: "Agents", icon: "settings" },
+	settings: { id: "settings", label: "Settings", icon: "settings" },
 	done: { id: "done", label: "Done", icon: "check" },
 	back: { id: "back", label: "All agents", icon: "arrow-left" },
 	newChat: { id: "new-chat", label: "New chat", icon: "square-pen" },
@@ -258,7 +258,7 @@ function agentsView(s: ViewState): Node {
 	return {
 		type: "floating",
 		mode: "panel",
-		subtitle: "Agents",
+		subtitle: "Agent settings",
 		actions: first ? [] : [ACTIONS.done],
 		children: [
 			{ type: "text", tone: "muted", text: first ? "Choose the agent you talk to: Model API for a model of your choice (on this Mac or hosted), or an agent you use already, with your own login." : "Each agent keeps its own setup, so you can switch back any time. ToolBelt switches once the new one starts." },
@@ -322,7 +322,7 @@ function agentView(s: ViewState, c: Connection): Node {
 		actions,
 		children: [startText(s, c.id)],
 	});
-	return { type: "floating", mode: "panel", subtitle: c.name, actions: [ACTIONS.back], children };
+	return { type: "floating", mode: "panel", subtitle: `${c.name} settings`, actions: [ACTIONS.back], children };
 }
 
 /** An agent's environment variables, secret ones kept in the Keychain by ToolBelt. */
@@ -359,7 +359,15 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 		{ type: "select", id: "thinking", label: "Thinking", value: m.thinking || "off", options: THINKING, description: "Off answers about twice as fast on a model on this Mac." },
 	);
 	return [
-		{ type: "card", id: "server", title: p.name, description: destination(url), children: [{ type: "form", id: "model-api", fields }] },
+		{
+			type: "card",
+			id: "server",
+			title: p.name,
+			description: destination(url),
+			// The server's models change (a model added or deleted): list them again.
+			actions: [{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" }],
+			children: [{ type: "form", id: "model-api", fields }],
+		},
 		{
 			type: "card",
 			id: "advanced",
