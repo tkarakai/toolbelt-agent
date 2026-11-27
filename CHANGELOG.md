@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Chats are saved, and you can pick them up again.** The clock button opens your chats, grouped by when you last used them, with search, Rename, Pin and Delete. Opening one continues it: Claude Code reopens its own session, so it remembers everything. An agent that can't do that (or a different agent than the chat was with) starts a new session that's given a summary of the conversation, and the chat says so.
+- **Continue from the ask bar.** ⌘K shows your three most recent chats under Continue, above the questions to try. Turn them off in the agents settings (say, while you share your screen).
+- Chats are kept for 30 days since you last used them by default. Choose 90 days, until you delete them, or not at all. Pinned chats stay until you delete them, and Delete all clears everything. Chats stay on this Mac, in the plugin's data folder.
 - **Agents keep their own setup.** The settings list Claude Code, Codex, Gemini CLI and your own ACP agents (add as many as you like), each with whether it's installed and when it last worked, so switching back to one is a click. ToolBelt switches only once the new agent has started: if it doesn't start, you keep talking to the one you had.
 - Editing a custom agent changes a draft until you save it. Saving the agent in use starts it with the changes first, and keeps the saved setup if that fails. Unsaved changes stay until you save or discard them, and custom agents can be deleted.
 - Testing an agent starts a separate copy of it, so a chat in progress isn't interrupted.

@@ -35,7 +35,9 @@ behind it, so you keep working while you talk to the agent.
    note offers Restore.
 
 In the window: **↵** asks, **esc** minimizes it into the sidebar, the title bar's buttons start a
-new chat, fold it back into the ask bar, stop an answer and open the settings. Click its sidebar
+new chat, open your saved chats, fold it back into the ask bar, stop an answer and open the
+settings. Chats are saved on this Mac (for 30 days since last used, unless you choose otherwise or
+pin them); open one to continue it, or pick a recent one under **Continue** in the ask bar. Click its sidebar
 item or press ⌘K to bring it back where it was; when it's in front, the same minimizes it. The
 item spins while the agent works and shows a dot when it answers while minimized.
 

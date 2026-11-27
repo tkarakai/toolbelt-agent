@@ -6,6 +6,7 @@ import { AGENTS, searchPath, which } from "./agents";
 import { connection, resolveConnection } from "./connections";
 import { AgentSession, type SessionOptions } from "./session";
 import { customId, exists, findCustom, isCustom, loadSettings, saveSettings, type ConnectionId, type CustomAgent, type Settings } from "./settings";
+import { newId, Threads, titleOf, type Keep } from "./threads";
 import { dirty, floating, SUGGESTIONS, type Page, type TestResult } from "./ui";
 
 const data = dataDir();
@@ -16,6 +17,11 @@ let found: Partial<Record<string, string | null>> = {};
 const drafts = new Map<ConnectionId, CustomAgent>();
 const tests: Partial<Record<ConnectionId, TestResult>> = {};
 let ctx: Context | undefined;
+const threads = new Threads(data);
+threads.prune(settings.keep);
+/** The saved chat on screen (null until a new chat's first question, or when chats aren't saved). */
+let thread: string | null = null;
+let search = "";
 
 // While an answer streams, render about ten times a second at most.
 let pending: ReturnType<typeof setTimeout> | null = null;
@@ -39,7 +45,70 @@ const options: Omit<SessionOptions, "resolve"> = {
 const session = new AgentSession({
 	...options,
 	resolve: async () => resolveConnection(connection(settings, settings.active ?? "claude")!, await searchPath()),
+	agentKey: () => settings.active,
 });
+
+/** Saves the chat on screen (creating it on its first question), unless chats aren't kept. */
+function persist() {
+	const messages = session.chat.messages;
+	const first = messages.find((m) => m.role === "user");
+	if (!first || (settings.keep === "off" && !thread)) return;
+	const now = Date.now();
+	const meta = thread ? threads.get(thread) : undefined;
+	if (thread && !meta) return; // deleted while on screen
+	const id = thread ?? newId();
+	threads.save({
+		id,
+		title: meta?.title ?? titleOf(first.text),
+		created: meta?.created ?? now,
+		updated: now,
+		pinned: meta?.pinned ?? false,
+		agent: session.session?.agent ?? settings.active,
+		agentName: settings.active ? (connection(settings, settings.active)?.name ?? "") : "",
+		count: messages.filter((m) => m.role === "user" || m.role === "assistant").length,
+		messages,
+		sessionId: session.session?.id ?? null,
+	});
+	if (!thread) threads.prune(settings.keep, now);
+	thread = id;
+}
+
+async function ask(text: string) {
+	const answered = session.ask(text);
+	persist();
+	await answered;
+	persist();
+	ctx?.invalidate("floating");
+}
+
+function newChat() {
+	persist();
+	session.reset();
+	thread = null;
+	collapsed = false;
+}
+
+function openThread(id: string) {
+	if (session.busy) return;
+	const saved = threads.load(id);
+	if (!saved) return;
+	persist();
+	session.restore(saved.messages, { sessionId: saved.sessionId, agent: saved.agent });
+	thread = id;
+	collapsed = false;
+	page = { view: "chat" };
+}
+
+function deleteThread(id: string) {
+	threads.remove(id);
+	if (thread === id) {
+		if (session.busy) session.stop();
+		session.reset();
+		thread = null;
+	}
+}
+
+const rowId = (payload: unknown) => String((payload as { rowId?: string; item?: string } | undefined)?.rowId ?? (payload as { item?: string } | undefined)?.item ?? "");
 
 /** Where each built-in agent's command is, for the settings. */
 async function detect() {
@@ -137,6 +206,9 @@ definePlugin({
 				found,
 				drafts,
 				tests,
+				threads: threads.list(),
+				thread,
+				search,
 				now: Date.now(),
 			}),
 	},
@@ -144,11 +216,34 @@ definePlugin({
 		const suggestion = SUGGESTIONS.find((s) => s.id === name);
 		if (name === "ask" || suggestion) {
 			collapsed = false;
-			void session.ask(suggestion ? suggestion.label : String((payload as { text?: string })?.text ?? ""));
+			page = { view: "chat" };
+			void ask(suggestion ? suggestion.label : String((payload as { text?: string })?.text ?? ""));
 		} else if (name === "stop") session.stop();
 		else if (name === "new-chat") {
-			collapsed = false;
-			session.reset();
+			newChat();
+			page = { view: "chat" };
+		} else if (name.startsWith("thread:")) openThread(name.slice("thread:".length));
+		else if (name === "history") {
+			search = "";
+			page = { view: "history" };
+		} else if (name === "chat") page = { view: "chat" };
+		else if (name === "open-thread") openThread(rowId(payload));
+		else if (name === "rename") {
+			const title = String((payload as { text?: string })?.text ?? "").replace(/\s+/g, " ").trim();
+			if (title) threads.update(rowId(payload), { title: title.slice(0, 120) });
+		} else if (name === "pin" || name === "unpin") threads.update(rowId(payload), { pinned: name === "pin" });
+		else if (name === "delete-thread") deleteThread(rowId(payload));
+		else if (name === "clear-threads") {
+			threads.clear();
+			thread = null;
+		} else if (name === "field" && (payload as { form?: string })?.form === "history") search = String((payload as { value?: unknown }).value ?? "");
+		else if (name === "field" && (payload as { form?: string })?.form === "conversations") {
+			const { field, value } = payload as { field: string; value: unknown };
+			if (field === "keep" && ["off", "30", "90", "forever"].includes(String(value))) {
+				save({ ...settings, keep: value as Keep });
+				threads.prune(settings.keep);
+				if (thread && !threads.get(thread)) thread = null;
+			} else if (field === "recent") save({ ...settings, recent: value === true });
 		} else if (name === "collapse") collapsed = true;
 		else if (name === "expand") collapsed = false;
 		else if (name === "settings") {

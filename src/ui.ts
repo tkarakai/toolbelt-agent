@@ -6,19 +6,22 @@ import type { AgentKind } from "./agents";
 import { connection, connections, type Connection } from "./connections";
 import type { Problem, Status } from "./session";
 import { findCustom, type ConnectionId, type CustomAgent, type Settings } from "./settings";
+import type { ThreadMeta } from "./threads";
 
 export const DOCS = "https://github.com/tkarakai/toolbelt-agent/blob/main/docs/other-agents.md";
 
 export const SUGGESTIONS: Suggestion[] = [
-	{ id: "suggest:attention", label: "What needs my attention?", icon: "bell" },
-	{ id: "suggest:updates", label: "Anything I should update?", icon: "package" },
-	{ id: "suggest:tools", label: "What can you see in ToolBelt?", icon: "eye" },
+	{ id: "suggest:attention", label: "What needs my attention?", icon: "bell", group: "Try asking" },
+	{ id: "suggest:updates", label: "Anything I should update?", icon: "package", group: "Try asking" },
+	{ id: "suggest:tools", label: "What can you see in ToolBelt?", icon: "eye", group: "Try asking" },
 ];
+/** How many recent chats the ask bar offers under Continue. */
+export const RECENT = 3;
 
 export type TestResult = { state: "running"; use?: boolean } | { state: "ok"; text: string } | { state: "failed"; text: string };
 
-/** What the window shows: the chat (or ask bar), the list of agents, or one agent's setup. */
-export type Page = { view: "chat" } | { view: "agents" } | { view: "agent"; id: ConnectionId };
+/** What the window shows: the chat (or ask bar), saved chats, the list of agents, or one agent's setup. */
+export type Page = { view: "chat" } | { view: "history" } | { view: "agents" } | { view: "agent"; id: ConnectionId };
 
 export type ViewState = {
 	settings: Settings;
@@ -35,6 +38,12 @@ export type ViewState = {
 	drafts: Map<ConnectionId, CustomAgent>;
 	/** Starts from the settings in progress or just finished, this run. */
 	tests: Partial<Record<ConnectionId, TestResult>>;
+	/** Saved chats, newest first. */
+	threads: ThreadMeta[];
+	/** The saved chat on screen, if it's saved. */
+	thread: string | null;
+	/** What the history is filtered by (titles; the person presses return to search). */
+	search: string;
 	now: number;
 };
 
@@ -46,6 +55,8 @@ const ACTIONS = {
 	collapse: { id: "collapse", label: "Back to the ask bar", icon: "chevrons-down-up" },
 	expand: { id: "expand", label: "Show the chat", icon: "chevrons-up-down" },
 	stop: { id: "stop", label: "Stop", icon: "square" },
+	history: { id: "history", label: "Chats", icon: "rotate-ccw-clock" },
+	chat: { id: "chat", label: "Back to the chat", icon: "arrow-left" },
 } satisfies Record<string, Action>;
 
 export function floating(s: ViewState): Node {
@@ -54,6 +65,7 @@ export function floating(s: ViewState): Node {
 		if (c) return agentView(s, c);
 	}
 	const active = s.settings.active ? connection(s.settings, s.settings.active) : undefined;
+	if (active && s.page.view === "history") return historyView(s);
 	if (!active || s.page.view !== "chat") return agentsView(s);
 	const name = active.name;
 	const busy = s.status !== "idle";
@@ -71,8 +83,8 @@ export function floating(s: ViewState): Node {
 			mode: "bar",
 			subtitle: name,
 			busy,
-			suggestions: s.messages.length ? [] : SUGGESTIONS,
-			actions: s.messages.length ? [ACTIONS.expand, ACTIONS.settings] : [ACTIONS.settings],
+			suggestions: s.messages.length ? [] : askSuggestions(s),
+			actions: [...(s.messages.length ? [ACTIONS.expand] : []), ...(s.threads.length ? [ACTIONS.history] : []), ACTIONS.settings],
 			children: [...(last ? [{ type: "text", text: last, tone: "muted" } as Node] : []), composer],
 		};
 	}
@@ -84,7 +96,75 @@ export function floating(s: ViewState): Node {
 		mode: "panel",
 		subtitle: busy ? `${name} · ${s.status === "starting" ? "starting…" : "working…"}` : name,
 		busy,
-		actions: busy ? [ACTIONS.stop, ACTIONS.settings] : [ACTIONS.newChat, ACTIONS.collapse, ACTIONS.settings],
+		actions: busy ? [ACTIONS.stop, ACTIONS.settings] : [ACTIONS.newChat, ...(s.threads.length ? [ACTIONS.history] : []), ACTIONS.collapse, ACTIONS.settings],
+		children,
+	};
+}
+
+/** The ask bar's suggestions: recent chats to continue (when the person wants them), then questions to try. */
+export function askSuggestions(s: Pick<ViewState, "settings" | "threads">): Suggestion[] {
+	if (!s.settings.recent || !s.threads.length) return SUGGESTIONS;
+	const recent: Suggestion[] = s.threads.slice(0, RECENT).map((t) => ({ id: `thread:${t.id}`, label: t.title, icon: t.pinned ? "pin" : "message-square", group: "Continue", metaAt: t.updated }));
+	if (s.threads.length > RECENT) recent.push({ id: "history", label: `All ${s.threads.length} chats…`, icon: "rotate-ccw-clock", group: "Continue" });
+	return [...recent, ...SUGGESTIONS];
+}
+
+const DAY = 86_400_000;
+
+/** Which heading a chat goes under in the history. */
+function period(t: ThreadMeta, now: number): string {
+	if (t.pinned) return "Pinned";
+	const start = new Date(now);
+	start.setHours(0, 0, 0, 0);
+	const today = start.getTime();
+	if (t.updated >= today) return "Today";
+	if (t.updated >= today - DAY) return "Yesterday";
+	if (t.updated >= today - 6 * DAY) return "Earlier this week";
+	if (t.updated >= today - 29 * DAY) return "This month";
+	return "Older";
+}
+
+export const keepLabel = (keep: Settings["keep"]) => (keep === "off" ? "Chats aren't saved" : keep === "forever" ? "Kept until you delete them" : `Kept for ${keep} days`);
+
+function historyView(s: ViewState): Node {
+	const query = s.search.trim().toLowerCase();
+	const shown = query ? s.threads.filter((t) => t.title.toLowerCase().includes(query)) : s.threads;
+	const children: Node[] = [{ type: "form", id: "history", fields: [{ type: "text", id: "search", label: "Search", value: s.search, placeholder: "Search chat titles, then press return" }] }];
+	const groups = new Map<string, ThreadMeta[]>();
+	for (const t of shown) groups.set(period(t, s.now), [...(groups.get(period(t, s.now)) ?? []), t]);
+	for (const [heading, threads] of groups)
+		children.push({
+			type: "stack",
+			gap: 1,
+			children: [
+				{ type: "text", tone: "muted", text: heading },
+				{
+					type: "list",
+					id: `threads-${heading}`,
+					open: { id: "open-thread", label: "Continue" },
+					items: threads.map((t) => ({
+						id: t.id,
+						title: t.title,
+						icon: t.pinned ? "pin" : "message-square",
+						subtitle: `${t.agentName || "Agent"} · ${t.count} message${t.count === 1 ? "" : "s"}`,
+						metaAt: t.updated,
+						...(t.id === s.thread ? { dot: { color: "info" as const, label: "On screen" } } : {}),
+						actions: [
+							{ id: "rename", label: "Rename", icon: "pencil", input: { placeholder: t.title } },
+							{ id: t.pinned ? "unpin" : "pin", label: t.pinned ? "Unpin" : "Pin", icon: t.pinned ? "pin-off" : "pin" },
+							{ id: "delete-thread", label: "Delete", icon: "trash", tone: "destructive", confirm: `Delete “${t.title}”? It's removed from this Mac.` },
+						],
+					})),
+				},
+			],
+		});
+	if (!shown.length) children.push({ type: "empty", icon: query ? "search-x" : "rotate-ccw-clock", title: query ? "No chats match" : "No saved chats", description: query ? "Search looks at chat titles." : keepLabel(s.settings.keep) });
+	children.push({ type: "text", tone: "muted", text: `${keepLabel(s.settings.keep)}${s.settings.keep === "off" ? "" : ", pinned ones until you delete them"}. Change it in Agents settings.` });
+	return {
+		type: "floating",
+		mode: "panel",
+		subtitle: `Chats · ${s.threads.length}`,
+		actions: [ACTIONS.chat, ACTIONS.newChat],
 		children,
 	};
 }
@@ -146,7 +226,7 @@ function agentsView(s: ViewState): Node {
 		const last = lastStart(s, c.id);
 		const actions: Action[] = [];
 		if (!inUse && startable(s, c)) actions.push({ id: "use", label: t?.state === "running" ? "Starting…" : "Use", inline: true, disabled: t?.state === "running" });
-		if (c.custom && !inUse) actions.push({ id: "delete", label: "Delete", icon: "trash-2", tone: "destructive", confirm: `Delete ${c.name}? Its setup is removed; your chats stay.` });
+		if (c.custom && !inUse) actions.push({ id: "delete", label: "Delete", icon: "trash", tone: "destructive", confirm: `Delete ${c.name}? Its setup is removed; your chats stay.` });
 		return {
 			id: c.id,
 			title: c.name,
@@ -166,6 +246,23 @@ function agentsView(s: ViewState): Node {
 		children: [
 			{ type: "text", tone: "muted", text: first ? "Choose the agent you talk to. It runs on this Mac with your own login." : "Each agent keeps its own setup, so you can switch back any time. ToolBelt switches once the new one starts." },
 			{ type: "list", id: "agents", items, open: { id: "open-agent", label: "Set up" } },
+			{
+				type: "form",
+				id: "conversations",
+				title: "Chats",
+				fields: [
+					{ type: "select", id: "keep", label: "Keep chats", value: s.settings.keep, options: [{ value: "off", label: "Don't save chats" }, { value: "30", label: "For 30 days" }, { value: "90", label: "For 90 days" }, { value: "forever", label: "Until I delete them" }], description: "Since a chat was last used. Pinned chats stay until you delete them. Chats can include what the agent read from your screens, and stay on this Mac." },
+					{ type: "switch", id: "recent", label: "Recent chats in the ask bar", value: s.settings.recent, description: "Under Continue, when you press ⌘K. Turn off while you share your screen." },
+				],
+			},
+			{
+				type: "card",
+				id: "saved",
+				title: `${s.threads.length} saved chat${s.threads.length === 1 ? "" : "s"}`,
+				description: "Deleting removes them from this Mac. An agent may keep its own record of a session (Claude Code does, in ~/.claude).",
+				actions: s.threads.length ? [{ id: "clear-threads", label: "Delete all", icon: "trash", tone: "destructive", confirm: `Delete all ${s.threads.length} saved chats, pinned ones too?` }] : [],
+				children: [],
+			},
 			{ type: "markdown", text: `**What agents can see.** The screens of the plugins ToolBelt's Settings → Agents lets them read. They ask before showing you a screen, and here they have no files, shell or web. [Other agents and local models](${DOCS})` },
 		],
 	};

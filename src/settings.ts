@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AGENTS, type AgentId } from "./agents";
+import type { Keep } from "./threads";
 
 export type CustomAgent = { id: string; name: string; command: string; env: string };
 /** A built-in agent's id, or `custom:<id>`. */
@@ -22,9 +23,14 @@ export type Settings = {
 	active: ConnectionId | null;
 	custom: CustomAgent[];
 	tested: Partial<Record<ConnectionId, Tested>>;
+	/** How long chats are kept: not at all, 30 or 90 days since they were last used, or until deleted. */
+	keep: Keep;
+	/** Recent chats show in the ask bar under Continue. */
+	recent: boolean;
 };
 
-export const DEFAULTS: Settings = { active: null, custom: [], tested: {} };
+export const DEFAULTS: Settings = { active: null, custom: [], tested: {}, keep: "30", recent: true };
+const KEEP: Keep[] = ["off", "30", "90", "forever"];
 const BUILT_IN = AGENTS.map((a) => a.id) as string[];
 
 export const customId = (id: string): ConnectionId => `custom:${id}`;
@@ -59,7 +65,7 @@ export function parseSettings(raw: Record<string, unknown>): Settings {
 		if (!custom.length) custom.push({ id: "1", name: str(raw.customName), command: str(raw.customCommand), env: str(raw.customEnv) });
 		active = customId(custom[0].id);
 	} else if (BUILT_IN.includes(raw.agent as string)) active = raw.agent as ConnectionId;
-	const settings: Settings = { active: null, custom, tested: {} };
+	const settings: Settings = { active: null, custom, tested: {}, keep: KEEP.includes(raw.keep as Keep) ? (raw.keep as Keep) : DEFAULTS.keep, recent: typeof raw.recent === "boolean" ? raw.recent : DEFAULTS.recent };
 	if (active && exists(settings, active)) settings.active = active;
 	if (raw.tested && typeof raw.tested === "object")
 		for (const [id, t] of Object.entries(raw.tested as Record<string, Partial<Tested>>))

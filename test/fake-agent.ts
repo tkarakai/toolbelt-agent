@@ -7,6 +7,9 @@ export type Turn = (agent: FakeAgent, sessionId: string, prompt: unknown[]) => P
 export class FakeAgent {
 	sent: any[] = [];
 	newSession: any = null;
+	loadSession: any = null;
+	/** Offer `loadSession`, replaying these updates when a session is reopened. */
+	loadable: unknown[] | null = null;
 	private onLine: (line: string) => void = () => {};
 	private onClose: (reason: string) => void = () => {};
 	private next = 1000;
@@ -54,7 +57,12 @@ export class FakeAgent {
 			return;
 		}
 		const reply = (result: unknown) => this.emit({ jsonrpc: "2.0", id: m.id, result });
-		if (m.method === "initialize") reply({ protocolVersion: 1, agentInfo: { name: "fake", title: "Fake Agent", version: "9.9" } });
+		if (m.method === "initialize") reply({ protocolVersion: 1, agentCapabilities: { loadSession: this.loadable !== null }, agentInfo: { name: "fake", title: "Fake Agent", version: "9.9" } });
+		else if (m.method === "session/load") {
+			this.loadSession = m.params;
+			for (const u of this.loadable ?? []) this.update(m.params.sessionId, u);
+			reply(null);
+		}
 		else if (m.method === "session/new") {
 			this.newSession = m.params;
 			reply({ sessionId: "s1" });

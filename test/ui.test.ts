@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { validateTree } from "@toolbelt/sdk/validation";
 import type { Node } from "@toolbelt/sdk";
 import { DEFAULTS, type Settings } from "../src/settings";
-import { floating, SUGGESTIONS, type ViewState } from "../src/ui";
+import { askSuggestions, floating, SUGGESTIONS, type ViewState } from "../src/ui";
+import type { ThreadMeta } from "../src/threads";
 
 const base: ViewState = {
 	settings: { ...DEFAULTS, active: "claude" },
@@ -15,7 +16,10 @@ const base: ViewState = {
 	found: { claude: "/bin/claude-agent-acp", codex: null, gemini: null },
 	drafts: new Map(),
 	tests: {},
-	now: 1_000_000_000,
+	threads: [],
+	thread: null,
+	search: "",
+	now: new Date(2026, 10, 26, 15).getTime(),
 };
 const view = (s: Partial<ViewState>) => {
 	const tree = floating({ ...base, ...s });
@@ -36,6 +40,7 @@ test("first run lists every agent, with no way back to a chat yet", () => {
 
 test("the agents list marks the one in use and remembers each agent's last start", () => {
 	const settings: Settings = {
+		...DEFAULTS,
 		active: "custom:1",
 		custom: [{ id: "1", name: "oMLX", command: "codex-acp --profile local", env: "" }],
 		tested: { "custom:1": { ok: true, at: base.now - 5 * 60_000, text: "ok" }, claude: { ok: false, at: base.now, text: "Not logged in. Run claude." } },
@@ -51,14 +56,14 @@ test("the agents list marks the one in use and remembers each agent's last start
 });
 
 test("an inactive custom agent can be deleted, after a confirmation", () => {
-	const settings: Settings = { active: "claude", custom: [{ id: "2", name: "", command: "x --acp", env: "" }], tested: {} };
+	const settings: Settings = { ...DEFAULTS, active: "claude", custom: [{ id: "2", name: "", command: "x --acp", env: "" }], tested: {} };
 	const row = list(view({ settings, page: { view: "agents" } })).items.find((i) => i.id === "custom:2")!;
 	expect(row.title).toBe("Custom agent");
 	expect(row.actions!.find((a) => a.id === "delete")).toMatchObject({ tone: "destructive", confirm: expect.stringContaining("Delete Custom agent?") });
 });
 
 test("a custom agent's page edits a draft; saving the one in use starts it first", () => {
-	const settings: Settings = { active: "custom:1", custom: [{ id: "1", name: "Local", command: "a --acp", env: "" }], tested: {} };
+	const settings: Settings = { ...DEFAULTS, active: "custom:1", custom: [{ id: "1", name: "Local", command: "a --acp", env: "" }], tested: {} };
 	const clean = view({ settings, page: { view: "agent", id: "custom:1" } });
 	expect(clean).toMatchObject({ subtitle: "Local", actions: [{ id: "back" }] });
 	expect((clean.children[0] as any).fields.map((f: any) => f.id)).toEqual(["name", "command", "env"]);
@@ -121,4 +126,45 @@ test("on first run, an agent's page opens from the list", () => {
 	expect(t.subtitle).toBe("Custom agent");
 	expect(card(t).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
 	expect(card(t).actions!.find((a) => a.id === "use")!.disabled).toBe(true);
+});
+
+const thread = (id: string, hoursAgo: number, extra: Partial<ThreadMeta> = {}): ThreadMeta => ({ id, title: `Chat ${id}`, created: 0, updated: base.now - hoursAgo * 3_600_000, pinned: false, agent: "claude", agentName: "Claude Code", count: 2, ...extra });
+
+test("the ask bar offers recent chats under Continue, then questions to try", () => {
+	const threads = [thread("aaaaaa1", 1), thread("aaaaaa2", 30), thread("aaaaaa3", 50), thread("aaaaaa4", 90)];
+	const t = view({ threads });
+	expect(t.suggestions!.map((x) => [x.id, x.group])).toEqual([
+		["thread:aaaaaa1", "Continue"],
+		["thread:aaaaaa2", "Continue"],
+		["thread:aaaaaa3", "Continue"],
+		["history", "Continue"],
+		...SUGGESTIONS.map((x) => [x.id, "Try asking"]),
+	]);
+	expect(t.suggestions![0].metaAt).toBe(threads[0].updated);
+	expect(t.actions!.map((a) => a.id)).toEqual(["history", "settings"]);
+	expect(askSuggestions({ settings: { ...base.settings, recent: false }, threads })).toEqual(SUGGESTIONS);
+	expect(view({}).actions!.map((a) => a.id)).toEqual(["settings"]);
+});
+
+test("the history groups chats by when they were used, pinned first, and searches titles", () => {
+	const threads = [thread("bbbbbb1", 1), thread("bbbbbb2", 20), thread("bbbbbb3", 24 * 40, { pinned: true, title: "Weekly cleanup" })];
+	const t = view({ threads, thread: "bbbbbb1", page: { view: "history" } });
+	expect(t).toMatchObject({ subtitle: "Chats · 3", actions: [{ id: "chat" }, { id: "new-chat" }] });
+	const groups = t.children.filter((c) => c.type === "stack") as any[];
+	expect(groups.map((c) => c.children[0].text)).toEqual(["Today", "Yesterday", "Pinned"]);
+	const row = groups[0].children[1].items[0];
+	expect(row).toMatchObject({ id: "bbbbbb1", dot: { color: "info" }, metaAt: threads[0].updated });
+	expect(row.actions.map((a: any) => a.id)).toEqual(["rename", "pin", "delete-thread"]);
+	expect(groups[2].children[1].items[0].actions[1].id).toBe("unpin");
+	const found = view({ threads, page: { view: "history" }, search: "weekly" });
+	expect((found.children.filter((c) => c.type === "stack") as any[]).map((c) => c.children[0].text)).toEqual(["Pinned"]);
+	const none = view({ threads, page: { view: "history" }, search: "zzz" });
+	expect(none.children.find((c) => c.type === "empty")).toMatchObject({ title: "No chats match" });
+});
+
+test("the agents settings say how long chats are kept and offer Delete all", () => {
+	const t = view({ page: { view: "agents" }, threads: [thread("cccccc1", 1)] });
+	const form = t.children.find((c) => c.type === "form") as any;
+	expect(form.fields.map((f: any) => [f.id, f.value])).toEqual([["keep", "30"], ["recent", true]]);
+	expect((t.children.find((c) => c.type === "card" && (c as any).id === "saved") as any).actions[0]).toMatchObject({ id: "clear-threads", tone: "destructive" });
 });

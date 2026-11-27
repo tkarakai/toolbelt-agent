@@ -9,7 +9,11 @@ export const VISIBLE_MESSAGES = 80;
 const DETAIL_LIMIT = 4000;
 
 export class Chat {
-	readonly messages: Message[] = [];
+	readonly messages: Message[];
+	/** A chat to continue, with its saved messages. */
+	constructor(messages: Message[] = []) {
+		this.messages = messages.map((m) => ({ ...m, ...(m.tool ? { tool: { ...m.tool } } : {}) }));
+	}
 	/** Tool call id → its message and what's known about the call so far. */
 	private tools = new Map<string, { message: Message; call: ToolCall }>();
 	/** The answer being streamed, if any. */
@@ -77,6 +81,27 @@ export class Chat {
 	lastAnswer(): string | null {
 		for (let i = this.messages.length - 1; i >= 0; i--) if (this.messages[i].role === "assistant" && this.messages[i].text.trim()) return this.messages[i].text;
 		return null;
+	}
+
+	/**
+	 * The conversation so far as plain text, for an agent that can't reopen its own session: the
+	 * person's questions and the answers, newest kept when it's longer than `limit` characters.
+	 */
+	transcript(limit = 8000): string {
+		const lines: string[] = [];
+		let size = 0;
+		for (let i = this.messages.length - 1; i >= 0; i--) {
+			const m = this.messages[i];
+			if (m.role !== "user" && m.role !== "assistant") continue;
+			const line = `${m.role === "user" ? "Person" : "You"}: ${m.text.trim()}`;
+			if (size + line.length > limit) {
+				if (!lines.length) lines.unshift(`${line.slice(0, limit)}…`);
+				break;
+			}
+			lines.unshift(line);
+			size += line.length + 2;
+		}
+		return lines.join("\n\n");
 	}
 
 	get empty() {

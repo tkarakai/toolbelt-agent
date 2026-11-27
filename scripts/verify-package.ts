@@ -1,7 +1,8 @@
 // Runs the built archive the way Toolbelt does: extracted into a temporary folder with no source
 // checkout or node_modules and a fresh data directory, its floating surface opened for the person
 // (first run: the agents list), a custom agent added and switched to through its events (a tiny
-// stdio ACP agent that only opens sessions), then a clean prepare and shutdown.
+// stdio ACP agent that opens sessions and says hello), a question whose chat is saved, then a
+// clean prepare and shutdown.
 import { $ } from "bun";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,7 +26,8 @@ try {
 		fake,
 		`for await (const line of console) {
 	const m = JSON.parse(line);
-	const result = m.method === "initialize" ? { protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: "fake", version: "1" } } : m.method === "session/new" ? { sessionId: "s1" } : null;
+	if (m.method === "session/prompt") console.log(JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello" } } } }));
+	const result = m.method === "initialize" ? { protocolVersion: 1, agentCapabilities: {}, agentInfo: { name: "fake", version: "1" } } : m.method === "session/new" ? { sessionId: "s1" } : m.method === "session/prompt" ? { stopReason: "end_turn" } : null;
 	if (m.id !== undefined) console.log(JSON.stringify(result ? { jsonrpc: "2.0", id: m.id, result } : { jsonrpc: "2.0", id: m.id, error: { code: -32601, message: "no" } }));
 }`,
 	);
@@ -62,6 +64,9 @@ try {
 					event("field", { form: "agent", field: "command", value: `${process.execPath} ${fake}` });
 					event("use", { rowId: "connection" });
 				} else if (step === "use" && msg.tree.mode === "bar") {
+					step = "ask";
+					event("ask", { composer: "ask", text: "Say hello" });
+				} else if (step === "ask" && msg.tree.mode === "panel" && !msg.tree.busy && JSON.stringify(msg.tree).includes("Hello")) {
 					step = "prepare";
 					send({ type: "prepare", requestId: "verify", reason: "upgrade" });
 				}
@@ -77,7 +82,9 @@ try {
 	if ((await proc.exited) !== 0 || step !== "done") throw Error(`Package contract failed at ${step}`);
 	const saved = JSON.parse(readFileSync(join(data, "settings.json"), "utf8"));
 	if (saved.active !== "custom:1" || saved.custom[0]?.name !== "Fake" || !saved.tested["custom:1"]?.ok) throw Error("The agent switched to was not saved");
-	console.log("Clean package: the first-run agents list, adding and switching to an agent, the ask bar, prepare and shutdown pass.");
+	const savedChats = JSON.parse(readFileSync(join(data, "threads", "index.json"), "utf8"));
+	if (savedChats.length !== 1 || savedChats[0].title !== "Say hello" || savedChats[0].count !== 2) throw Error("The chat was not saved");
+	console.log("Clean package: the first-run agents list, adding and switching to an agent, the ask bar, a saved chat, prepare and shutdown pass.");
 } finally {
 	rmSync(root, { recursive: true, force: true });
 }

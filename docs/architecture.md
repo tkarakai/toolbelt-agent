@@ -22,9 +22,16 @@ The only surface is `floating`. `src/ui.ts` renders it as a pure function of the
 - **An agent's page** (subtitle its name, `back`): a built-in agent's install state and login
   note, or a custom agent's form (`agent`: `name`, `command`, `env`), and a card (`connection`)
   with `test`, `discard`, `save` and `use` ("Use X", or Save for the agent in use).
+- **Chats** (`mode: "panel"`, subtitle `Chats · N`, from `history`): a search form (`history`,
+  field `search`, matched against titles when committed), then one `list` per period (Pinned,
+  Today, Yesterday, Earlier this week, This month, Older) under a muted heading. A row's
+  `open-thread` continues it; its actions are `rename` (with text input), `pin`/`unpin` and
+  `delete-thread` (confirmed). Title bar: `chat` (back) and `new-chat`.
 - **Ask bar** (`mode: "bar"`) while the chat is empty or folded back (`collapsed`): suggestions
-  (`suggest:*`, sent as questions), the composer (`ask`), and when folded back the last answer's
-  first line and `expand`.
+  (`suggest:*` under "Try asking", sent as questions; above them, unless `Settings.recent` is off,
+  the three most recent chats as `thread:<id>` under "Continue" with their time, and `history`
+  when there are more), the composer (`ask`), and when folded back the last answer's first line
+  and `expand`. Suggestion groups and times need ToolBelt 0.7.1; older hosts show a flat list.
 - **Chat** (`mode: "panel"`): the `conversation` (`chat`), a problem card when something needs the
   person (with the install command and an Open settings action), and the composer. Title bar:
   `new-chat`, `collapse`, `settings`; while working `stop` and `settings`, `busy` set and the
@@ -53,7 +60,7 @@ this archive, and on Claude Code's native binary, larger than Toolbelt's archive
 ## ACP client and session
 
 `src/acp.ts` is a minimal ACP v1 client over the agent's stdio: `initialize` (client capabilities:
-no file system, no terminal), `session/new`, `session/prompt`, `session/cancel`, `session/update`
+no file system, no terminal), `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/update`
 notifications and `session/request_permission` requests. Any other request from the agent
 (`fs/*`, `terminal/*`, …) is answered with JSON-RPC error -32601. Lines that aren't JSON are
 ignored (agents that log to stdout).
@@ -81,6 +88,26 @@ turn, tool calls into tool rows that update in place (named without the `mcp__to
 with their input and output as details, capped at 4,000 characters). Thoughts, plans and usage
 aren't shown.
 
+## Saved chats
+
+`src/threads.ts` keeps chats in `<data>/threads/`: `index.json` (id, title, created, updated,
+pinned, agent, agentName, count) and `<id>.json` (messages as shown, the agent's session id),
+written atomically. A chat is saved when its first question is asked and again when the answer
+ends (`persist()` in index.ts); its title is the first question, shortened to 60 characters.
+`Settings.keep` (`off`, `30`, `90`, `forever`; default 30) prunes unpinned chats by last use at
+start, when a new chat is saved and when it changes; at most 200 unpinned chats are kept. With
+`off`, new chats aren't saved. `Delete all` removes the folder. Ids are checked against
+`/^[a-z0-9]{6,24}$/` before touching files; a damaged index loads as no chats.
+
+Opening a chat (`thread:<id>` or `open-thread`) shows its messages and remembers its session.
+The next question continues it (`AgentSession.restore`): when the agent in use is the chat's agent
+and offers `loadSession`, the session reopens with `session/load` (its replayed updates are
+ignored, since the messages are already shown) and the question goes as a follow-up. Otherwise a
+new session starts, and the first prompt carries the preamble and a recap of the conversation
+(`Chat.transcript`: questions and answers, newest kept within 8,000 characters, no tool output),
+with a note in the chat. Deleting a chat removes only ToolBelt's copy; agents may keep their own
+session records.
+
 ## Settings and switching
 
 `src/settings.ts` keeps every agent's setup: `active` (a built-in id or `custom:<id>`), `custom`
@@ -100,11 +127,11 @@ deleted.
 ## Data
 
 The stable plugin id is `agent`. Data schema 1: `settings.json` in the data folder, written
-atomically: `active`, `custom` and `tested`, plus the first version's `agent`, `customName`,
+atomically: `active`, `custom`, `tested`, `keep` and `recent`, plus the first version's `agent`, `customName`,
 `customCommand` and `customEnv` mirrored from the agent in use, so older versions still read it.
 The first version's file (only those fields) loads as one active agent (a custom one becomes
 `custom:1`). Unknown agents, malformed ids and results for missing agents are dropped.
-`workspace/` is the agents' working folder.
+`threads/` holds saved chats (above); `workspace/` is the agents' working folder.
 
 ## Tests
 
@@ -115,4 +142,4 @@ refused tools, problems, stop, test starts) and every view, validated against th
 schema, and settings loading (the first version's file, bad values, the mirrored fields).
 `scripts/verify-package.ts` runs the built archive like Toolbelt does: the first-run agents list,
 adding a custom agent and switching to it (a tiny stdio ACP agent that only opens sessions), the
-ask bar, prepare and shutdown.
+ask bar, a question whose chat is saved, prepare and shutdown.
