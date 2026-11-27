@@ -10,7 +10,7 @@ import { Chat, toolName } from "./chat";
 export type Status = "idle" | "starting" | "working";
 export type Problem = { text: string; install?: string; settings?: boolean };
 
-export const CLIENT = { name: "toolbelt-agent", title: "ToolBelt Agent", version: "0.4.0" };
+export const CLIENT = { name: "toolbelt-agent", title: "ToolBelt Agent", version: "0.4.1" };
 
 /** What the agent is told before the person's first question. */
 export const PREAMBLE = `You are the assistant inside ToolBelt, a macOS app whose plugins show screens (tasks, software updates, processes and more). The person is looking at ToolBelt while they talk to you.
