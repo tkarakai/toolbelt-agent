@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Every question tells the agent when it was sent, and a chat continued in a new session recaps when each message was written, so an agent picking up a chat days later knows what "today" means.
+- Model API lists the server's models afresh each time you open its settings, and **Refresh models** lists them again, so a model you added or deleted shows up (or goes).
+- The settings say what they are: "Agent settings", and "Model API settings" (or the agent's name) on an agent's page. The gear's tooltip says Settings.
 
 ## 0.4.0 — 2026-11-27
 - Requires Toolbelt 0.8.0 (SDK 0.6.0), for secrets kept in your Mac's Keychain and collapsible cards.

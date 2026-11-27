@@ -336,7 +336,8 @@ definePlugin({
 			const item = String((payload as { item?: string })?.item ?? "");
 			if (item === "add") page = { view: "agent", id: newCustom() };
 			else if (exists(settings, item) || drafts.has(item as ConnectionId)) page = { view: "agent", id: item as ConnectionId };
-			if (item === "model-api") void refreshModels();
+			// Listed afresh each time: the server's models may have changed since.
+			if (item === "model-api") void refreshModels(true);
 		} else if (name === "field" && page.view === "agent" && isCustom(page.id)) {
 			const { field, value } = payload as { field: string; value: unknown };
 			const id = page.id;
@@ -365,7 +366,8 @@ definePlugin({
 				drafts.set(id, { id, name: "", command: "", vars: varsFrom(value) });
 				delete tests[id];
 			}
-		} else if (name === "discard") {
+		} else if (name === "refresh-models") void refreshModels(true);
+		else if (name === "discard") {
 			const id = target(payload);
 			if (id) {
 				drafts.delete(id);

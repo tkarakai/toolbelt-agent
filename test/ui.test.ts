@@ -31,7 +31,7 @@ const card = (t: ReturnType<typeof view>) => t.children.find((c) => c.type === "
 
 test("first run lists every agent, with no way back to a chat yet", () => {
 	const t = view({ settings: DEFAULTS });
-	expect(t).toMatchObject({ mode: "panel", subtitle: "Agents", actions: [] });
+	expect(t).toMatchObject({ mode: "panel", subtitle: "Agent settings", actions: [] });
 	const items = list(t).items;
 	expect(items.map((i) => i.title)).toEqual(["Model API", "Claude Code", "Codex", "Gemini CLI", "Add an ACP agent…"]);
 	// The Model API agent needs a model before it can be used.
@@ -67,7 +67,7 @@ test("an inactive custom agent can be deleted, after a confirmation", () => {
 test("a custom agent's page edits a draft; saving the one in use starts it first", () => {
 	const settings: Settings = { ...DEFAULTS, active: "custom:1", custom: [{ id: "1", name: "Local", command: "a --acp", vars: [] }], tested: {} };
 	const clean = view({ settings, page: { view: "agent", id: "custom:1" } });
-	expect(clean).toMatchObject({ subtitle: "Local", actions: [{ id: "back" }] });
+	expect(clean).toMatchObject({ subtitle: "Local settings", actions: [{ id: "back" }] });
 	expect((clean.children[0] as any).fields.map((f: any) => f.id)).toEqual(["name", "command", "env"]);
 	expect(card(clean).actions!.map((a) => a.id)).toEqual(["test"]);
 	const drafts = new Map([["custom:1" as const, { id: "1", name: "Local", command: "b --acp", vars: [] }]]);
@@ -125,7 +125,7 @@ test("problems show with what to do", () => {
 test("on first run, an agent's page opens from the list", () => {
 	const drafts = new Map([["custom:1" as const, { id: "1", name: "", command: "", vars: [] }]]);
 	const t = view({ settings: DEFAULTS, drafts, page: { view: "agent", id: "custom:1" } });
-	expect(t.subtitle).toBe("Custom agent");
+	expect(t.subtitle).toBe("Custom agent settings");
 	expect(card(t).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
 	expect(card(t).actions!.find((a) => a.id === "use")!.disabled).toBe(true);
 });
@@ -197,7 +197,8 @@ const cardById = (t: ReturnType<typeof view>, id: string) => t.children.find((c)
 test("the Model API page: server, key in the Keychain, models, thinking, and where chats go", () => {
 	const settings: Settings = { ...DEFAULTS, modelApi: modelApi({ preset: "omlx", model: "Qwen3.8-27B-4bit" }) };
 	const t = view({ settings, page: { view: "agent", id: "model-api" }, models: { state: "ok", list: [{ id: "Qwen3.8-27B-4bit", context: 65536 }, { id: "small" }] } });
-	expect(t.subtitle).toBe("Model API");
+	expect(t.subtitle).toBe("Model API settings");
+	expect(cardById(t, "server").actions).toMatchObject([{ id: "refresh-models", label: "Refresh models" }]);
 	const server = cardById(t, "server");
 	expect(server).toMatchObject({ title: "oMLX", description: "Stays on this Mac" });
 	const fields = server.children[0].fields;

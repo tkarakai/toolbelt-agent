@@ -93,7 +93,8 @@ export class Chat {
 		for (let i = this.messages.length - 1; i >= 0; i--) {
 			const m = this.messages[i];
 			if (m.role !== "user" && m.role !== "assistant") continue;
-			const line = `${m.role === "user" ? "Person" : "You"}: ${m.text.trim()}`;
+			const when = m.at ? ` (${new Date(m.at).toLocaleString("en-US", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })})` : "";
+			const line = `${m.role === "user" ? "Person" : "You"}${when}: ${m.text.trim()}`;
 			if (size + line.length > limit) {
 				if (!lines.length) lines.unshift(`${line.slice(0, limit)}…`);
 				break;
