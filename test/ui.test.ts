@@ -168,3 +168,21 @@ test("the agents settings say how long chats are kept and offer Delete all", () 
 	expect(form.fields.map((f: any) => [f.id, f.value])).toEqual([["keep", "30"], ["recent", true]]);
 	expect((t.children.find((c) => c.type === "card" && (c as any).id === "saved") as any).actions[0]).toMatchObject({ id: "clear-threads", tone: "destructive" });
 });
+
+test("Claude Code's page edits its environment lines as a draft; saving the one in use starts it first", () => {
+	const settings: Settings = { ...DEFAULTS, active: "claude", env: { claude: "ANTHROPIC_MODEL=a" } };
+	const clean = view({ settings, page: { view: "agent", id: "claude" } });
+	const form = clean.children.find((c) => c.type === "form") as any;
+	expect(form.fields).toMatchObject([{ type: "textarea", id: "env", value: "ANTHROPIC_MODEL=a" }]);
+	expect(card(clean).actions!.map((a) => a.id)).toEqual(["test"]);
+	const drafts = new Map([["claude" as const, { id: "claude", name: "", command: "", env: "ANTHROPIC_MODEL=b" }]]);
+	const edited = view({ settings, drafts, page: { view: "agent", id: "claude" } });
+	expect((edited.children.find((c) => c.type === "form") as any).fields[0].value).toBe("ANTHROPIC_MODEL=b");
+	expect(card(edited).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
+	expect(card(edited).actions!.find((a) => a.id === "use")!.label).toBe("Save");
+	const row = list(view({ settings, drafts, page: { view: "agents" } })).items.find((i) => i.id === "claude")!;
+	expect(row.subtitle).toBe("Unsaved changes");
+	expect(list(view({ settings, drafts, page: { view: "agents" } })).items.map((i) => i.id)).toEqual(["claude", "codex", "gemini", "add"]);
+	// Agents that don't take environment lines have no form.
+	expect(view({ page: { view: "agent", id: "gemini" } }).children.some((c) => c.type === "form")).toBe(false);
+});

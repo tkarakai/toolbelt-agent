@@ -134,3 +134,10 @@ test("another agent (or one that can't reopen sessions) gets a recap in a new se
 	expect(s.chat.messages.map((m) => m.role)).toEqual(["user", "assistant", "system", "user"]);
 	expect(s.session).toEqual({ id: "s1", agent: "codex" });
 });
+
+test("Claude Code with environment lines (a local model) is still isolated and gets them", async () => {
+	const { s, agent, spawned } = session(undefined, { resolve: async () => ({ ok: true, id: "claude", name: "Claude Code", command: ["/bin/claude-agent-acp"], env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8000" } }) });
+	await s.ask("Hi");
+	expect(spawned()!.env).toMatchObject({ HOME: "/Users/me", ANTHROPIC_BASE_URL: "http://127.0.0.1:8000" });
+	expect(agent.newSession._meta).toEqual(CLAUDE_ISOLATION);
+});

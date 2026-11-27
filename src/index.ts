@@ -5,7 +5,7 @@ import { agentCommand, dataDir, definePlugin, type Context } from "@toolbelt/sdk
 import { AGENTS, searchPath, which } from "./agents";
 import { connection, resolveConnection } from "./connections";
 import { AgentSession, type SessionOptions } from "./session";
-import { customId, exists, findCustom, isCustom, loadSettings, saveSettings, type ConnectionId, type CustomAgent, type Settings } from "./settings";
+import { customId, exists, findCustom, isCustom, loadSettings, saveSettings, type BuiltInId, type ConnectionId, type CustomAgent, type Settings } from "./settings";
 import { newId, Threads, titleOf, type Keep } from "./threads";
 import { dirty, floating, SUGGESTIONS, type Page, type TestResult } from "./ui";
 
@@ -14,6 +14,7 @@ let settings: Settings = loadSettings(data);
 let page: Page = { view: settings.active ? "chat" : "agents" };
 let collapsed = false;
 let found: Partial<Record<string, string | null>> = {};
+/** Agents being edited: a custom agent's setup, or a built-in agent's `env` (its other fields unused). */
 const drafts = new Map<ConnectionId, CustomAgent>();
 const tests: Partial<Record<ConnectionId, TestResult>> = {};
 let ctx: Context | undefined;
@@ -144,11 +145,12 @@ async function start(id: ConnectionId, use: boolean): Promise<boolean> {
 	return ok;
 }
 
-/** Saves a custom agent's draft. */
+/** Saves an agent's draft. */
 function commit(id: ConnectionId) {
 	const d = drafts.get(id);
 	if (!d) return;
 	drafts.delete(id);
+	if (!isCustom(id)) return save({ ...settings, env: { ...settings.env, [id]: d.env } });
 	const custom = findCustom(settings, id) ? settings.custom.map((c) => (customId(c.id) === id ? d : c)) : [...settings.custom, d];
 	save({ ...settings, custom });
 }
@@ -163,8 +165,9 @@ async function use(id: ConnectionId) {
 		if (page.view === "agents") page = { view: "agent", id };
 		return;
 	}
+	const edited = drafts.has(id);
 	commit(id);
-	if (settings.active !== id || isCustom(id)) session.close();
+	if (settings.active !== id || isCustom(id) || edited) session.close();
 	save({ ...settings, active: id });
 	ctx?.toast(`Now using ${connection(settings, id)?.name}`, "success");
 	if (first) page = { view: "chat" };
@@ -263,6 +266,13 @@ definePlugin({
 			const base = drafts.get(id) ?? findCustom(settings, id);
 			if (base && (field === "name" || field === "command" || field === "env")) {
 				drafts.set(id, { ...base, [field]: String(value ?? "") });
+				delete tests[id];
+			}
+		} else if (name === "field" && page.view === "agent") {
+			const { field, value } = payload as { field: string; value: unknown };
+			const id = page.id as BuiltInId;
+			if (field === "env" && AGENTS.some((a) => a.id === id && a.env)) {
+				drafts.set(id, { id, name: "", command: "", env: String(value ?? "") });
 				delete tests[id];
 			}
 		} else if (name === "discard") {

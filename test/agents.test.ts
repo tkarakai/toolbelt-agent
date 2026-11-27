@@ -46,3 +46,15 @@ test("a custom agent runs its own command with its environment", () => {
 	expect(resolveAgent({ agent: "custom", customCommand: "missing-agent" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("can't find `missing-agent`") });
 	expect(resolveAgent({ agent: "custom", customCommand: "my-agent", customEnv: "bad" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("NAME=value") });
 });
+
+test("Claude Code takes environment lines from its setup; agents without the field don't", () => {
+	tool("claude-agent-acp");
+	tool("gemini");
+	expect(resolveAgent({ agent: "claude", env: "# oMLX\nANTHROPIC_BASE_URL=http://127.0.0.1:8000\nANTHROPIC_MODEL=Qwen" }, dir)).toMatchObject({
+		ok: true,
+		id: "claude",
+		env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8000", ANTHROPIC_MODEL: "Qwen" },
+	});
+	expect(resolveAgent({ agent: "claude", env: "oops" }, dir)).toMatchObject({ ok: false, id: "claude", reason: expect.stringContaining("NAME=value") });
+	expect(resolveAgent({ agent: "gemini", env: "A=1" }, dir)).toMatchObject({ ok: true, env: {} });
+});

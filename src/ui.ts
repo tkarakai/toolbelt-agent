@@ -5,7 +5,7 @@ import type { Action, Message, Node, Suggestion } from "@toolbelt/sdk";
 import type { AgentKind } from "./agents";
 import { connection, connections, type Connection } from "./connections";
 import type { Problem, Status } from "./session";
-import { findCustom, type ConnectionId, type CustomAgent, type Settings } from "./settings";
+import { findCustom, isCustom, type ConnectionId, type CustomAgent, type Settings } from "./settings";
 import type { ThreadMeta } from "./threads";
 
 export const DOCS = "https://github.com/tkarakai/toolbelt-agent/blob/main/docs/other-agents.md";
@@ -186,10 +186,11 @@ const relative = (at: number, now: number) => {
 
 const firstSentence = (t: string) => t.replace(/\s+/g, " ").match(/^.*?[.!?](\s|$)/)?.[0].trim() ?? t;
 
-/** Whether a custom agent has edits that aren't saved (or was never saved). */
+/** Whether an agent has edits that aren't saved (or, for a custom one, was never saved). */
 export function dirty(s: Pick<ViewState, "settings" | "drafts">, id: ConnectionId): boolean {
 	const d = s.drafts.get(id);
 	if (!d) return false;
+	if (!isCustom(id)) return d.env !== (s.settings.env[id] ?? "");
 	const saved = findCustom(s.settings, id);
 	return !saved || saved.name !== d.name || saved.command !== d.command || saved.env !== d.env;
 }
@@ -208,7 +209,7 @@ function lastStart(s: ViewState, id: ConnectionId): TestResult | null {
 function statusLine(s: ViewState, c: Connection): string {
 	const t = s.tests[c.id];
 	if (t?.state === "running") return "Starting…";
-	if (dirty(s, c.id)) return findCustom(s.settings, c.id) ? "Unsaved changes" : "New, not saved";
+	if (dirty(s, c.id)) return c.kind || findCustom(s.settings, c.id) ? "Unsaved changes" : "New, not saved";
 	const last = lastStart(s, c.id);
 	if (last?.state === "failed") return `Didn't start: ${firstSentence(last.text)}`;
 	if (c.kind && !s.found[c.kind.id]) return s.found[c.kind.id] === undefined ? "Looking for it…" : "Not installed";
@@ -275,8 +276,10 @@ function agentView(s: ViewState, c: Connection): Node {
 	const isDirty = dirty(s, c.id);
 	const saved = !!c.kind || !!findCustom(s.settings, c.id);
 	const children: Node[] = [];
-	if (c.kind) children.push({ type: "markdown", text: kindStatus(c.kind, s.found[c.kind.id]) });
-	else
+	if (c.kind) {
+		children.push({ type: "markdown", text: kindStatus(c.kind, s.found[c.kind.id]) });
+		if (c.kind.env) children.push({ type: "form", id: "agent", fields: [{ type: "textarea", id: "env", label: "Environment", value: c.env ?? "", placeholder: c.kind.env.placeholder, rows: 2, description: c.kind.env.description }] });
+	} else
 		children.push({
 			type: "form",
 			id: "agent",

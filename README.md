@@ -27,7 +27,8 @@ behind it, so you keep working while you talk to the agent.
 
    Each agent keeps its own setup, so you can switch between them from the gear button. Toolbelt
    switches only once the new agent has started; if it doesn't, you keep the one you had. **Test**
-   starts an agent and connects it to Toolbelt without asking anything. Other agents and local
+   starts an agent and connects it to Toolbelt without asking anything. Claude Code's setup takes
+   environment lines, to use a local model (such as oMLX) instead of your login. Other agents and local
    models (add as many custom ACP agents as you like):
    [docs/other-agents.md](docs/other-agents.md).
 4. Ask. The bar grows into a chat. The agent reads screens on its own; the first time it wants to

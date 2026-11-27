@@ -20,7 +20,7 @@ The only surface is `floating`. `src/ui.ts` renders it as a pure function of the
   inactive custom agents, `delete` (confirmed); its `open-agent` opens an agent's page, and the
   last row (`add`) a new custom agent. Done (`done`) once an agent is in use.
 - **An agent's page** (subtitle its name, `back`): a built-in agent's install state and login
-  note, or a custom agent's form (`agent`: `name`, `command`, `env`), and a card (`connection`)
+  note (and, for Claude Code, a form `agent` with its `env` lines), or a custom agent's form (`agent`: `name`, `command`, `env`), and a card (`connection`)
   with `test`, `discard`, `save` and `use` ("Use X", or Save for the agent in use).
 - **Chats** (`mode: "panel"`, subtitle `Chats · N`, from `history`): a search form (`history`,
   field `search`, matched against titles when committed), then one `list` per period (Pinned,
@@ -47,11 +47,12 @@ resets on restart.
 `src/agents.ts` lists the agents (Claude Code's adapter `claude-agent-acp`, Codex's `codex-acp`,
 `gemini --acp`) and resolves the chosen one to a command, or to why it can't start (with its
 install command). A custom agent is a command line (split like a shell would, without running one)
-plus `NAME=value` environment lines. Commands are looked up in the person's login-shell PATH
+plus `NAME=value` environment lines; Claude Code (`AgentKind.env`) takes such lines too, to use
+another model or server, and keeps its isolation (below) with them. Commands are looked up in the person's login-shell PATH
 (read once, by asking `$SHELL -ilc` to print it, 5 s limit) followed by the usual install folders
 (`~/.local/bin`, `~/.bun/bin`, Homebrew, `/usr/local/bin`, …), because Toolbelt starts plugins with
 the app's minimal PATH. Agents run with that PATH and only `HOME`, `USER`, `LANG`, `LC_ALL`,
-`TMPDIR`, `SHELL` from the plugin's environment, plus a custom agent's own variables.
+`TMPDIR`, `SHELL` from the plugin's environment, plus the agent's own variables from its setup.
 
 Nothing is bundled or downloaded: each agent is the person's own installation and login. (Claude
 Code's adapter depends on the Claude Agent SDK, whose license doesn't allow redistributing it in
@@ -111,7 +112,8 @@ session records.
 ## Settings and switching
 
 `src/settings.ts` keeps every agent's setup: `active` (a built-in id or `custom:<id>`), `custom`
-(`id`, `name`, `command`, `env`) and `tested` (each agent's last start from the settings: `ok`,
+(`id`, `name`, `command`, `env`), `env` (environment lines of built-in agents that take them,
+by id) and `tested` (each agent's last start from the settings: `ok`,
 `at`, `text`). The agent in use is always one that worked: `use` first starts the agent as it's
 set up (a custom agent's draft) in a separate `AgentSession` whose `check()` opens a session
 without prompting, then saves the draft, makes it active and closes the conversation's agent so
@@ -119,7 +121,8 @@ the next question starts the new one. If the start fails, nothing is saved and t
 stays. `test` does the same start without switching. Starting from the settings never touches the
 conversation's own agent process.
 
-Edits to a custom agent go to an in-memory draft (`drafts`) until `save`, `use` or `discard`; the
+Edits to a custom agent, or to a built-in agent's environment lines, go to an in-memory draft
+(`drafts`) until `save`, `use` or `discard`; the
 list says "Unsaved changes" meanwhile. A draft's failed start isn't remembered as the saved
 setup's result. New custom agents exist only as drafts until saved. The agent in use can't be
 deleted.
@@ -127,7 +130,7 @@ deleted.
 ## Data
 
 The stable plugin id is `agent`. Data schema 1: `settings.json` in the data folder, written
-atomically: `active`, `custom`, `tested`, `keep` and `recent`, plus the first version's `agent`, `customName`,
+atomically: `active`, `custom`, `env`, `tested`, `keep` and `recent`, plus the first version's `agent`, `customName`,
 `customCommand` and `customEnv` mirrored from the agent in use, so older versions still read it.
 The first version's file (only those fields) loads as one active agent (a custom one becomes
 `custom:1`). Unknown agents, malformed ids and results for missing agents are dropped.
