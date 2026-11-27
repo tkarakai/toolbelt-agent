@@ -38,8 +38,10 @@ export type ModelApiSettings = {
 	maxSteps: string;
 	instructions: string;
 	extra: string;
+	/** "on": keep a local model loaded while ToolBelt runs (see keeper.ts). Not passed to the agent. */
+	keepLoaded: string;
 };
-export const MODEL_API_DEFAULTS: ModelApiSettings = { preset: "omlx", url: "", api: "auto", model: "", thinking: "off", maxOutput: "", context: "", maxSteps: "", instructions: "", extra: "" };
+export const MODEL_API_DEFAULTS: ModelApiSettings = { preset: "omlx", url: "", api: "auto", model: "", thinking: "off", maxOutput: "", context: "", maxSteps: "", instructions: "", extra: "", keepLoaded: "" };
 /** The Model API agent's key, in the Keychain. */
 export const MODEL_API_KEY = "model-api/key";
 

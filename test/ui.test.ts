@@ -202,7 +202,7 @@ test("the Model API page: server, key in the Keychain, models, thinking, and whe
 	const server = cardById(t, "server");
 	expect(server).toMatchObject({ title: "oMLX", description: "Stays on this Mac" });
 	const fields = server.children[0].fields;
-	expect(fields.map((f: any) => f.id)).toEqual(["preset", "url", "key", "model", "thinking"]);
+	expect(fields.map((f: any) => f.id)).toEqual(["preset", "url", "key", "model", "thinking", "keepLoaded"]);
 	expect(fields[2]).toMatchObject({ type: "text", secret: "model-api/key", value: "" });
 	expect(fields[3].options).toEqual([{ value: "Qwen3.8-27B-4bit", label: "Qwen3.8-27B-4bit", sub: "66k context" }, { value: "small", label: "small" }]);
 	expect(cardById(t, "advanced")).toMatchObject({ collapsible: true, description: "Chat Completions (automatic) · up to 12 tool steps per answer" });
@@ -213,8 +213,32 @@ test("the Model API page: server, key in the Keychain, models, thinking, and whe
 	expect(cardById(hosted, "server").description).toBe("Sends chats to openrouter.ai");
 	expect(cardById(hosted, "guide").description).toBe("Using a hosted model");
 	const ollama = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "ollama" }) }, page: { view: "agent", id: "model-api" } });
-	expect(cardById(ollama, "server").children[0].fields.map((f: any) => f.id)).toEqual(["preset", "url", "model", "thinking"]);
+	expect(cardById(ollama, "server").children[0].fields.map((f: any) => f.id)).toEqual(["preset", "url", "model", "thinking", "keepLoaded"]);
+	// Keeping the model loaded is only offered for a server on this Mac.
+	expect(cardById(hosted, "server").children[0].fields.map((f: any) => f.id)).not.toContain("keepLoaded");
 	expect(cardById(ollama, "guide").children[0].text).toContain("OLLAMA_CONTEXT_LENGTH");
+});
+
+test("keeping the model loaded: the switch, how it's going, and a warning above the composer when it fails", () => {
+	const settings: Settings = { ...DEFAULTS, active: "model-api", modelApi: modelApi({ model: "Qwen3.8-27B-4bit", keepLoaded: "on" }) };
+	const page = { view: "agent", id: "model-api" } as const;
+	const at = base.now - 2 * 60_000;
+	const fields = (t: ReturnType<typeof view>) => cardById(t, "server").children[0].fields;
+	const off = view({ settings: { ...settings, modelApi: modelApi({ model: "q" }) }, page });
+	expect(fields(off).find((f: any) => f.id === "keepLoaded")).toMatchObject({ type: "switch", value: false });
+	expect(cardById(off, "server").children).toHaveLength(1);
+
+	const ready = view({ settings, page, keep: { state: "ready", at, ms: 38_000, loaded: true, since: at } });
+	expect(fields(ready).find((f: any) => f.id === "keepLoaded").value).toBe(true);
+	expect(cardById(ready, "server").children[1]).toMatchObject({ type: "text", tone: "success", text: "Kept loaded: checked 2 min ago. The server loaded it for the last check (38 s)." });
+
+	const failed = { state: "failed", at, text: "Couldn't reach http://127.0.0.1:8000/v1: is the server running?", since: at, attempts: 5 } as const;
+	expect(cardById(view({ settings, page, keep: failed }), "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("Trying again every 5 minutes (failing since") });
+	const bar = view({ settings, keep: failed });
+	expect(bar.mode).toBe("bar");
+	expect(bar.children.at(-2)).toMatchObject({ type: "text", tone: "danger", text: "The model isn't loaded: Couldn't reach http://127.0.0.1:8000/v1: is the server running?" });
+	// Another agent in use: nothing about the Model API's model in the chat.
+	expect(view({ settings: { ...settings, active: "claude" }, keep: failed }).children.some((c: any) => c.tone === "danger")).toBe(false);
 });
 
 test("a failed Model API test opens “Before you start” at what went wrong", () => {

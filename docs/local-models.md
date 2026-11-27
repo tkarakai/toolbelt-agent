@@ -45,6 +45,8 @@ ToolBelt's own lightweight agent, built into the plugin. Open **Model API** in t
 - **Before you start:** what to set up on the server's side, for a model on this Mac or a hosted
   one.
 
+- **Keep the model loaded** (a server on this Mac only): see [below](#keeping-the-model-loaded).
+
 **Test** starts the agent, connects it to ToolBelt and asks the model one small question with a
 tool. It reports how long the answer took and whether the model called the tool. If it fails, it
 opens **Before you start** at the item that explains why. A model that answers without calling
@@ -53,6 +55,27 @@ tools would answer without reading ToolBelt.
 It only ever connects to the address you give it, and ToolBelt's own MCP server. It doesn't name
 chats with an extra request or send a long system prompt of its own, which is why it answers about
 twice as fast as Claude Code on the same model.
+
+### Keeping the model loaded
+
+A local server unloads a model when it runs short of memory, after it's been idle a while (Ollama's
+default is 5 minutes), or when its engine stops. The next question then waits for the model to load
+again: 20–40 s for a 27B model on oMLX (measured), before the answer even starts.
+
+With **Keep the model loaded** on, while ToolBelt runs and Model API is the agent in use, the plugin
+asks the model for a one-word answer every minute. That costs about 0.1 s on a loaded model, keeps
+the server from treating it as idle, and makes a server that dropped it load it again. The settings
+show when it last checked, and when the server had to load the model for it. If it can't (the server
+isn't running, the model's name changed, the key was refused), a notice says why, the plugin's
+sidebar item shows **!**, and the ask bar says the model isn't loaded. It keeps trying every minute,
+then every 5 minutes, and says when the model is back. ToolBelt never starts the server itself.
+
+The model's memory stays in use while it's on, and the GPU doesn't idle between checks. Turn it off
+when you need the memory. The server's own setting is the first line of defense (see oMLX below);
+this switch also covers a model engine that stopped.
+
+Each new chat starts with the same instructions and tools, so the server's prompt cache serves them
+to it: on oMLX a new chat's first request takes about a second to start instead of 4–5 s.
 
 ## Claude Code on a local server
 
@@ -159,6 +182,10 @@ settings).
    setup here had 8.
 4. **Prompt cache.** Leave the cache on. Each request repeats the earlier conversation, and most
    of it was served from the cache.
+5. **Pin the model** you chat with (the pin in its model settings, or `is_pinned`) so oMLX doesn't
+   unload it to make room for another model. Pinning doesn't cover an engine that stopped: on
+   2026-11-27 oMLX kept listing the model as loaded after its engine exited and only reloaded it on
+   the next request. Model API's **Keep the model loaded** makes that request every minute.
 
 ### llama.cpp (not yet tested)
 

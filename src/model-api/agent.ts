@@ -42,7 +42,7 @@ type Chat = {
 export class ModelApiAgent {
 	private chats = new Map<string, Chat>();
 
-	constructor(private readonly config: Config, private readonly o: { version: string; log?: (line: string) => void; now?: () => Date } ) {}
+	constructor(private readonly config: Config, private readonly o: { version: string; log?: (line: string) => void }) {}
 
 	async newSession(mcp: McpStarter): Promise<string> {
 		const id = crypto.randomUUID();
@@ -150,11 +150,10 @@ export class ModelApiAgent {
 		}
 		const tools = await mcp.tools();
 		const chat = { id, mcp, report: null, sentText: "", sentThought: "", seen: new Set<number>(), calls: 0 } as unknown as Chat;
-		// Fixed for the chat, so the system prompt (and the server's prompt cache) stays the same.
-		const now = describeNow(this.o.now?.() ?? new Date());
+		// The same for every chat, so the server's prompt cache serves it to each new chat too. The
+		// time isn't here: every message says when it was sent (the plugin's `sentAt`).
 		const sections = [
 			section("toolbelt", () => mcp.instructions || "ToolBelt's tools read what the person's ToolBelt plugins show."),
-			section("now", () => `It is ${now}.`),
 			...(c.instructions ? [section("instructions", () => c.instructions)] : []),
 		];
 		const registry = createRegistry();
@@ -278,6 +277,3 @@ function thoughtOf(content: Content[]) {
 		.join("");
 }
 
-export function describeNow(d: Date) {
-	return `${d.toLocaleString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })} (${Intl.DateTimeFormat().resolvedOptions().timeZone})`;
-}

@@ -181,6 +181,49 @@ export function authHeaders(api: Api, key: string): Record<string, string> {
 	return api === "messages" ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : { Authorization: `Bearer ${key}` };
 }
 
+/** How long a keep-alive request may take: loading a large model from disk takes a minute or more. */
+export const PING_TIMEOUT_MS = 180_000;
+
+/**
+ * One tiny request for a one-token answer: a server that dropped the model loads it again, and one
+ * that unloads idle models counts it as use. A server's own "loaded" list can't stand in for this:
+ * oMLX listed a model whose engine had exited until a request came. For keeping a local model loaded.
+ */
+export async function pingModel(c: Pick<Config, "url" | "api" | "key" | "model">, fetcher: typeof fetch = fetch, timeoutMs = PING_TIMEOUT_MS): Promise<{ ms: number }> {
+	const messages = [{ role: "user", content: "Hi" }];
+	const [path, body] =
+		c.api === "messages"
+			? [`${baseUrlFor(c.api, c.url)}/v1/messages`, { model: c.model, max_tokens: 1, messages }]
+			: c.api === "responses"
+				? [`${c.url}/responses`, { model: c.model, input: "Hi", max_output_tokens: 16 }]
+				: [`${c.url}/chat/completions`, { model: c.model, max_tokens: 1, stream: false, messages }];
+	const started = Date.now();
+	let r: Response;
+	try {
+		r = await fetcher(path, { method: "POST", headers: { "content-type": "application/json", ...authHeaders(c.api, c.key) }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+	} catch (e) {
+		const err = e as Error;
+		if (err.name === "TimeoutError" || err.name === "AbortError") throw new Error(`The server didn't answer within ${Math.round(timeoutMs / 1000)} s.`);
+		throw new Error(`Couldn't reach ${c.url}: is the server running?`);
+	}
+	const text = await r.text().catch(() => "");
+	if (r.status === 401 || r.status === 403) throw new Error("The server refused the API key.");
+	if (r.status === 404) throw new Error(`The server doesn't know the model "${c.model}".`);
+	if (!r.ok) throw new Error(`The server answered ${r.status}${detailOf(text) ? `: ${detailOf(text)}` : ""}.`);
+	return { ms: Date.now() - started };
+}
+
+/** A server's error message from its JSON body, shortened. */
+function detailOf(text: string): string {
+	try {
+		const body = JSON.parse(text) as { error?: { message?: string } | string; detail?: string; message?: string };
+		const m = typeof body.error === "string" ? body.error : (body.error?.message ?? body.detail ?? body.message);
+		return typeof m === "string" ? m.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+	} catch {
+		return "";
+	}
+}
+
 /** The server's models (`GET <url>/models`), for the settings' model list. */
 export async function listModels(c: Pick<Config, "url" | "api" | "key">, fetcher: typeof fetch = fetch): Promise<{ id: string; context?: number }[]> {
 	const r = await fetcher(`${c.url}/models`, { headers: authHeaders(c.api, c.key), signal: AbortSignal.timeout(10_000) });

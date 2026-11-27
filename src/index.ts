@@ -1,11 +1,13 @@
 // ToolBelt Agent: a floating plugin that talks to an ACP agent (Claude Code, Codex, Gemini CLI or
 // another) about the person's tools, through ToolBelt's own MCP server.
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentCommand, dataDir, definePlugin, type Context } from "@toolbelt/sdk";
 import { AGENTS, modelApiCommand, searchPath, which } from "./agents";
 import { connection, resolveConnection, type Draft } from "./connections";
-import { listModels, preset, readConfig, type Api } from "./model-api/config";
-import { AgentSession, type SessionOptions } from "./session";
+import { ModelKeeper, type KeepState } from "./keeper";
+import { isLocal, listModels, pingModel, preset, readConfig, type Api, type Config } from "./model-api/config";
+import { AgentSession, PREPARED_AGENT, sweepUnusedSessions, type SessionOptions } from "./session";
 import { customId, exists, findCustom, isCustom, loadSettings, MODEL_API_DEFAULTS, MODEL_API_KEY, SECRET_KEY, saveSettings, secretPrefix, type BuiltInId, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
 import { newId, Threads, titleOf, type Keep } from "./threads";
 import { dirty, floating, SUGGESTIONS, type ModelList, type Page, type TestResult } from "./ui";
@@ -46,6 +48,10 @@ const options: Omit<SessionOptions, "resolve"> = {
 	path: () => searchPath(),
 	changed,
 	log: (line) => console.error(`[agent] ${line}`),
+	// A Model API session opened ahead of a question (or by Test) that was never asked anything.
+	discarded: (agentId, sessionId) => {
+		if (agentId === PREPARED_AGENT && /^[0-9a-f-]{36}$/.test(sessionId)) rmSync(join(data, "model-api", sessionId), { recursive: true, force: true });
+	},
 };
 
 /** The conversation, always with the agent in use (its saved setup, never a draft). */
@@ -54,6 +60,59 @@ const session = new AgentSession({
 	resolve: async () => resolveConnection(connection(settings, settings.active ?? "claude")!, await searchPath(), secret, data),
 	agentKey: () => settings.active,
 });
+
+/** The local model to keep loaded: the Model API agent's, when it's in use, on this Mac, and asked for. */
+function keepTarget(): Config | null {
+	const m = settings.modelApi;
+	if (ctx?.mode !== "active" || settings.active !== "model-api" || m.keepLoaded !== "on") return null;
+	try {
+		const c = readConfig({ TOOLBELT_MODEL_API_PRESET: m.preset, TOOLBELT_MODEL_API_URL: m.url, TOOLBELT_MODEL_API_API: m.api, TOOLBELT_MODEL_API_MODEL: m.model });
+		return isLocal(c.url) ? c : null;
+	} catch {
+		return null;
+	}
+}
+
+const keeper = new ModelKeeper({
+	ping: async () => {
+		const c = keepTarget();
+		if (!c) throw new Error("The Model API settings changed.");
+		return pingModel({ ...c, key: (await secret(MODEL_API_KEY).catch(() => null)) ?? "" });
+	},
+	busy: () => session.busy,
+	changed: (next, previous) => keepChanged(next, previous),
+});
+
+/** Says when keeping the model loaded starts failing and when it works again; the badge stays meanwhile. */
+function keepChanged(next: KeepState, previous: KeepState) {
+	const model = settings.modelApi.model;
+	if (next.state === "failed" && previous.state !== "failed") {
+		console.error(`[agent] couldn't keep ${model} loaded: ${next.text}`);
+		ctx?.toast(`Couldn't keep ${model} loaded: ${next.text} Trying again every minute.`, "error");
+		ctx?.badge("!");
+	} else if (next.state === "ready" && previous.state === "failed") {
+		console.error(`[agent] ${model} is loaded again`);
+		ctx?.toast(`${model} is loaded again.`, "success");
+	}
+	// ToolBelt keeps a badge across plugin restarts: clear it whenever it isn't failing (any change).
+	if (next.state !== "failed" && previous.state !== next.state) ctx?.badge(null);
+	if (next.state === "ready" && next.loaded) console.error(`[agent] the server loaded ${model} for a keep-alive check (${Math.round(next.ms / 1000)} s)`);
+	ctx?.invalidate("floating");
+}
+
+/** Starts, moves or stops keeping the model loaded after the settings changed. */
+function syncKeeper() {
+	const c = keepTarget();
+	if (c) keeper.start(`${c.preset.id}|${c.url}|${c.api}|${c.model}`);
+	else keeper.stop();
+}
+
+/** Opens the agent's next session ahead of the question (after the setup changed, it's opened afresh). */
+async function prepare(fresh = false) {
+	if (ctx?.mode !== "active" || !settings.active) return;
+	if (fresh) await session.unprepare();
+	void session.prepare();
+}
 
 /** Saves the chat on screen (creating it on its first question), unless chats aren't kept. */
 function persist() {
@@ -93,6 +152,7 @@ function newChat() {
 	session.reset();
 	thread = null;
 	collapsed = false;
+	void prepare();
 }
 
 function openThread(id: string) {
@@ -112,6 +172,7 @@ function deleteThread(id: string) {
 		if (session.busy) session.stop();
 		session.reset();
 		thread = null;
+		void prepare();
 	}
 }
 
@@ -125,8 +186,13 @@ async function detect() {
 }
 
 function save(next: Settings) {
+	const before = settings;
 	settings = next;
 	saveSettings(data, settings);
+	syncKeeper();
+	// The agent in use, or its setup, changed: a session opened ahead of time has the old one.
+	const setup = (s: Settings) => (s.active ? JSON.stringify(connection(s, s.active)) : "");
+	if (before.active !== next.active || setup(before) !== setup(next)) void prepare(true);
 }
 
 /**
@@ -266,9 +332,14 @@ definePlugin({
 		if (c.mode === "active") {
 			void detect();
 			await toKeychain(c).catch((e) => console.error(`[agent] ${(e as Error).message}`));
+			sweepUnusedSessions(join(data, "model-api"));
+			c.badge(null); // a failure badge from before a restart; keeping the model loaded sets it again
+			syncKeeper();
+			void prepare();
 		}
 	},
 	stop() {
+		keeper.stop();
 		session.close();
 	},
 	render: {
@@ -289,6 +360,7 @@ definePlugin({
 				thread,
 				search,
 				now: Date.now(),
+				keep: keeper.state,
 			}),
 	},
 	async onEvent(_surface, name, payload, c) {
@@ -352,7 +424,7 @@ definePlugin({
 				delete tests["model-api"];
 				void refreshModels(true);
 			} else if ((form === "model-api" || form === "model-api-advanced") && field in MODEL_API_DEFAULTS) {
-				const next = { ...modelApiDraft(), [field]: String(value ?? "") };
+				const next = { ...modelApiDraft(), [field]: field === "keepLoaded" ? (value === true ? "on" : "") : String(value ?? "") };
 				// Another server: its own usual address.
 				if (field === "preset") next.url = "";
 				drafts.set("model-api", { id: "model-api", name: "", command: "", vars: [], modelApi: next });

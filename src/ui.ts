@@ -5,6 +5,7 @@ import type { Action, Message, Node, Suggestion } from "@toolbelt/sdk";
 import type { AgentKind } from "./agents";
 import { connection, connections, type Connection, type Draft } from "./connections";
 import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, type Preset } from "./model-api/config";
+import { KEEP_FAST_RETRIES, type KeepState } from "./keeper";
 import type { Problem, Status } from "./session";
 import { findCustom, isCustom, MODEL_API_KEY, secretPrefix, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
 import type { ThreadMeta } from "./threads";
@@ -53,6 +54,8 @@ export type ViewState = {
 	/** What the history is filtered by (titles; the person presses return to search). */
 	search: string;
 	now: number;
+	/** Keeping the Model API agent's local model loaded (when that's on). */
+	keep?: KeepState;
 };
 
 const ACTIONS = {
@@ -93,12 +96,12 @@ export function floating(s: ViewState): Node {
 			busy,
 			suggestions: s.messages.length ? [] : askSuggestions(s),
 			actions: [...(s.messages.length ? [ACTIONS.expand] : []), ...(s.threads.length ? [ACTIONS.history] : []), ACTIONS.settings],
-			children: [...(last ? [{ type: "text", text: last, tone: "muted" } as Node] : []), composer],
+			children: [...(last ? [{ type: "text", text: last, tone: "muted" } as Node] : []), ...keepWarning(s), composer],
 		};
 	}
 	const children: Node[] = [{ type: "conversation", id: "chat", messages: s.messages, empty: "Ask about your tools." }];
 	if (s.problem) children.push(problemCard(s.problem));
-	children.push(composer);
+	children.push(...keepWarning(s), composer);
 	return {
 		type: "floating",
 		mode: "panel",
@@ -108,6 +111,26 @@ export function floating(s: ViewState): Node {
 		children,
 	};
 }
+
+/** When the model couldn't be kept loaded: said above the composer, since the next answer will wait or fail. */
+function keepWarning(s: ViewState): Node[] {
+	if (s.keep?.state !== "failed" || s.settings.active !== "model-api") return [];
+	return [{ type: "text", tone: "danger", text: `The model isn't loaded: ${s.keep.text}` }];
+}
+
+/** How keeping the model loaded is going, under the Model API settings. */
+export function keepText(k: KeepState | undefined, now: number): Node | null {
+	if (!k || k.state === "off") return null;
+	if (k.state === "checking") return { type: "text", tone: "muted", text: "Keeping the model loaded: checking it now…" };
+	if (k.state === "failed") {
+		const every = k.attempts >= KEEP_FAST_RETRIES ? "every 5 minutes" : "every minute";
+		return { type: "text", tone: "danger", text: `Couldn't keep the model loaded: ${k.text} Trying again ${every}${k.attempts > 1 ? ` (failing since ${clock(k.since)})` : ""}.` };
+	}
+	const loaded = k.loaded ? ` The server loaded it for the last check (${Math.round(k.ms / 1000)} s).` : "";
+	return { type: "text", tone: "success", text: `Kept loaded: checked ${relative(k.at, now)}.${loaded}` };
+}
+
+const clock = (at: number) => new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 /** The ask bar's suggestions: recent chats to continue (when the person wants them), then questions to try. */
 export function askSuggestions(s: Pick<ViewState, "settings" | "threads">): Suggestion[] {
@@ -358,6 +381,16 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 		{ type: "combobox", id: "model", label: "Model", value: m.model, options: listed.map((x) => ({ value: x.id, label: x.id, ...(x.context ? { sub: `${Math.round(x.context / 1000)}k context` } : {}) })), freeform: true, placeholder: "Choose or type a model", description: modelNote },
 		{ type: "select", id: "thinking", label: "Thinking", value: m.thinking || "off", options: THINKING, description: "Off answers about twice as fast on a model on this Mac." },
 	);
+	// Only for a server on this Mac: a hosted one keeps its models loaded, and checks would cost money.
+	if (isLocal(url))
+		fields.push({
+			type: "switch",
+			id: "keepLoaded",
+			label: "Keep the model loaded",
+			value: m.keepLoaded === "on",
+			description: `While ToolBelt runs, asks the model for a one-word answer every minute, so the server loads it again if it dropped it and a chat's first answer doesn't wait for loading. The model's memory stays in use.${s.settings.active === "model-api" ? "" : " Works while Model API is the agent in use."}`,
+		});
+	const keep = s.settings.active === "model-api" ? keepText(s.keep, s.now) : null;
 	return [
 		{
 			type: "card",
@@ -366,7 +399,7 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 			description: destination(url),
 			// The server's models change (a model added or deleted): list them again.
 			actions: [{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" }],
-			children: [{ type: "form", id: "model-api", fields }],
+			children: [{ type: "form", id: "model-api", fields }, ...(keep ? [keep] : [])],
 		},
 		{
 			type: "card",

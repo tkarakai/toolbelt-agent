@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- **Keep the model loaded.** Model API with a server on this Mac has a new switch, "Keep the model loaded". While ToolBelt runs, it asks the model for a one-word answer every minute. If the server dropped the model, that loads it again, so a chat's first answer doesn't wait 20–40 s for loading. The settings show when it last checked. If it can't keep the model loaded, a notice says why, the plugin's sidebar item shows "!", and the ask bar says so; it keeps trying (every minute, then every 5 minutes) and says when the model is back.
+- Model API's new chats answer sooner: the model's server can reuse its cached copy of ToolBelt's instructions and tools for every new chat (the chat's start time is no longer in them; each message already says when it was sent). On a 27B model on oMLX, about 4–5 s less before a new chat's first answer.
+- Model API opens the next chat's session before you ask, so the first question doesn't wait for the agent to start. Sessions that were never asked anything (including the ones Test opened) are removed from the plugin's data.
 
 ## 0.4.1 — 2026-11-27
 - Every question tells the agent when it was sent, and a chat continued in a new session recaps when each message was written, so an agent picking up a chat days later knows what "today" means.

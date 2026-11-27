@@ -195,3 +195,73 @@ test("a reopened Claude Code session also leaves Auto; other agents' modes and a
 	await codex.s.ask("Hi");
 	expect(codex.agent.setMode).toEqual([]);
 });
+
+const MODEL_API = async () => ({ ok: true as const, id: "model-api" as const, name: "Model API", command: ["/bun", "/plugin/model-api.js"], env: {} });
+
+test("prepare opens the Model API agent's session before the first question, which then reuses it", async () => {
+	const prompts: unknown[] = [];
+	const discarded: string[] = [];
+	const { s, agent } = session(async (_a, _id, prompt) => void prompts.push(prompt), { resolve: MODEL_API, discarded: (a, id) => discarded.push(`${a}/${id}`) });
+	await s.prepare();
+	expect(agent.sent.map((m) => m.method)).toEqual(["initialize", "session/new"]);
+	expect(s.status).toBe("idle");
+	expect(s.chat.messages).toEqual([]);
+	await s.ask("What's overdue?");
+	expect(agent.sent.filter((m) => m.method === "session/new")).toHaveLength(1);
+	expect(prompts[0]).toEqual([{ type: "text", text: PREAMBLE }, { type: "text", text: `${SENT}\n\nWhat's overdue?` }]);
+	// A session that was asked something is kept: the saved chat reopens it.
+	s.reset();
+	expect(discarded).toEqual([]);
+});
+
+test("a question asked while the agent is being prepared waits for it instead of starting another", async () => {
+	const { s, agent } = session(undefined, { resolve: MODEL_API });
+	const prepared = s.prepare();
+	await s.ask("Hi");
+	await prepared;
+	expect(agent.sent.filter((m) => m.method === "initialize")).toHaveLength(1);
+	expect(agent.sent.filter((m) => m.method === "session/new")).toHaveLength(1);
+});
+
+test("other agents aren't prepared: they'd keep a process running and might record an empty session", async () => {
+	const { s, spawned } = session();
+	await s.prepare();
+	expect(spawned()).toBeNull();
+});
+
+test("an unused prepared session is discarded when the setup changes or the chat is replaced", async () => {
+	const discarded: string[] = [];
+	const { s, agent } = session(undefined, { resolve: MODEL_API, discarded: (a, id) => discarded.push(`${a}/${id}`) });
+	await s.prepare();
+	await s.unprepare();
+	expect(agent.closed).toBe(true);
+	expect(discarded).toEqual(["model-api/s1"]);
+	// Prepared again, then a saved chat is opened instead: that one is continued, not the prepared one.
+	await s.prepare();
+	s.restore([{ role: "user", text: "Earlier" }], { sessionId: "old", agent: "model-api" });
+	expect(discarded).toEqual(["model-api/s1", "model-api/s1"]);
+});
+
+test("a prepare overtaken by a saved chat gives up and doesn't take its place", async () => {
+	const discarded: string[] = [];
+	let release: () => void = () => {};
+	const gate = new Promise<void>((r) => (release = r));
+	const { s } = session(undefined, {
+		resolve: async () => (await gate, MODEL_API()),
+		discarded: (a, id) => discarded.push(`${a}/${id}`),
+	});
+	const prepared = s.prepare();
+	s.restore([{ role: "user", text: "Earlier" }], { sessionId: "old", agent: "model-api" });
+	release();
+	await prepared;
+	expect(s.session).toEqual({ id: "old", agent: "model-api" });
+	expect((s as unknown as { client: unknown }).client).toBeNull();
+});
+
+test("a failed prepare stays quiet: the question reports it", async () => {
+	const { s } = session(undefined, { resolve: async () => ({ ok: false, id: "model-api", name: "Model API", reason: "No model chosen." }) as never });
+	await s.prepare();
+	expect(s.problem).toBeNull();
+	await s.ask("Hi");
+	expect(s.problem?.text).toBe("No model chosen.");
+});

@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoApi, destination, ENV, extraFields, isLocal, listModels, preset, readConfig } from "../src/model-api/config";
+import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig } from "../src/model-api/config";
 import { piModel, serverFetch } from "../src/model-api/models";
 import { ModelApiServer } from "../src/model-api/server";
+import { sweepUnusedSessions } from "../src/session";
 import { fakeMcp, fakeModelServer } from "./model-api-fakes";
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -15,7 +16,7 @@ afterEach(async () => {
 /** A server and a client talking to it, collecting what it sends. */
 function client(env: Record<string, string>, calls: { name: string; args: unknown }[] = []) {
 	const out: any[] = [];
-	const server = new ModelApiServer({ version: "test", env, send: (line) => out.push(JSON.parse(line)), startMcp: () => fakeMcp(calls)(), now: () => new Date("2026-11-26T09:00:00") });
+	const server = new ModelApiServer({ version: "test", env, send: (line) => out.push(JSON.parse(line)), startMcp: () => fakeMcp(calls)() });
 	cleanup.push(() => server.close());
 	let id = 0;
 	const request = async (method: string, params: unknown) => {
@@ -85,6 +86,39 @@ describe("settings", () => {
 	});
 });
 
+describe("keeping the model loaded (pingModel)", () => {
+	test.each([
+		["chat", "/v1/chat/completions", { max_tokens: 1, stream: false }],
+		["messages", "/v1/messages", { max_tokens: 1 }],
+		["responses", "/v1/responses", { max_output_tokens: 16 }],
+	] as const)("asks for a one-token answer over %s", async (api, path, limits) => {
+		const fake = fakeModelServer();
+		cleanup.push(fake.stop);
+		const { ms } = await pingModel({ url: fake.url, api, key: "secret-key", model: "small" });
+		expect(ms).toBeGreaterThanOrEqual(0);
+		expect(fake.seen).toHaveLength(1);
+		expect(fake.seen[0]).toMatchObject({ path, body: { model: "small", ...limits } });
+		if (api === "messages") expect(fake.seen[0]!.headers["x-api-key"]).toBe("secret-key");
+		else expect(fake.seen[0]!.headers.authorization).toBe("Bearer secret-key");
+	});
+
+	test("says why it failed: no server, a refused key, an unknown model, a slow server", async () => {
+		await expect(pingModel({ url: "http://127.0.0.1:9/v1", api: "chat", key: "", model: "m" })).rejects.toThrow("Couldn't reach http://127.0.0.1:9/v1: is the server running?");
+		for (const [status, message] of [
+			[401, "The server refused the API key."],
+			[404, 'The server doesn\'t know the model "m".'],
+			[507, "The server answered 507: nope."],
+		] as const) {
+			const fake = fakeModelServer({ fail: status });
+			cleanup.push(fake.stop);
+			await expect(pingModel({ url: fake.url, api: "chat", key: "", model: "m" })).rejects.toThrow(message);
+		}
+		const slow = fakeModelServer({ delayMs: 200 });
+		cleanup.push(slow.stop);
+		await expect(pingModel({ url: slow.url, api: "chat", key: "", model: "m" }, fetch, 50)).rejects.toThrow("didn't answer within 0 s");
+	});
+});
+
 describe("only the configured server", () => {
 	test("adds the extra fields and refuses other addresses", async () => {
 		const seen: { url: string; body: string }[] = [];
@@ -128,7 +162,6 @@ describe.each([
 		expect(requests).toHaveLength(2);
 		const first = JSON.stringify(requests[0]!.body);
 		expect(first).toContain("Read a screen before answering"); // ToolBelt's instructions
-		expect(first).toContain("Thursday, November 26, 2026");
 		expect(first).toContain("read_screen");
 		if (api === "messages") expect(requests[0]!.headers["x-api-key"]).toBe("secret-key");
 		else expect(requests[0]!.headers.authorization).toBe("Bearer secret-key");
@@ -146,6 +179,23 @@ describe("conversations", () => {
 		await expect(c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "Hi" }] })).rejects.toThrow(/refused the API key/);
 	});
 
+	test("every new chat starts with the same system prompt and tools, so the server's prompt cache serves them", async () => {
+		const fake = fakeModelServer({ noTools: true });
+		cleanup.push(fake.stop);
+		const c = client(env(fake.url));
+		await c.request("initialize", { protocolVersion: 1 });
+		for (const text of ["First chat", "Second chat"]) {
+			const { sessionId } = await c.request("session/new", { cwd: "/tmp", mcpServers: MCP });
+			await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+			await Bun.sleep(5); // a later moment: nothing time-dependent may reach the system prompt
+		}
+		const [a, b] = fake.seen.filter((s) => s.path === "/v1/chat/completions").map((s) => s.body);
+		expect(a.messages[0].role).toBe("system");
+		expect(b.messages[0]).toEqual(a.messages[0]);
+		expect(b.tools).toEqual(a.tools);
+		expect(JSON.stringify(a.messages[0])).not.toMatch(/\b20\d\d\b/); // no date in it
+	});
+
 	test("settings problems are reported for the session, and without ToolBelt there's no session", async () => {
 		const c = client({ [ENV.preset]: "omlx" });
 		await c.request("initialize", { protocolVersion: 1 });
@@ -153,6 +203,25 @@ describe("conversations", () => {
 		const d = client(env("http://127.0.0.1:9/v1"));
 		await expect(d.request("session/new", { cwd: "/tmp", mcpServers: [] })).rejects.toThrow(/No ToolBelt MCP server/);
 		await expect(d.request("session/fork", {})).rejects.toThrow(/Not offered/);
+	});
+
+	test("at start, kept chats that were never asked anything are removed; asked ones stay", async () => {
+		const fake = fakeModelServer();
+		cleanup.push(fake.stop);
+		const state = mkdtempSync(join(tmpdir(), "model-api-"));
+		cleanup.push(() => rmSync(state, { recursive: true, force: true }));
+		const c = client(env(fake.url, { [ENV.state]: state }));
+		await c.request("initialize", { protocolVersion: 1 });
+		const asked = (await c.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		await c.request("session/prompt", { sessionId: asked, prompt: [{ type: "text", text: "What's due today?" }] });
+		const unused = (await c.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		await c.server.close();
+		mkdirSync(join(state, "not-a-chat"));
+		writeFileSync(join(state, "not-a-chat", "main.jsonl"), "{}");
+		expect(existsSync(join(state, unused, "main.jsonl"))).toBe(true);
+		sweepUnusedSessions(state);
+		expect(readdirSync(state).sort()).toEqual([asked, "not-a-chat"].sort());
+		sweepUnusedSessions(join(state, "missing")); // no folder yet: nothing to do
 	});
 
 	test("a kept chat reopens with its history, in a new process", async () => {
