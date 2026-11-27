@@ -44,9 +44,10 @@ servers, so a local model gets a short prompt: ToolBelt's tools and little else.
 Environment to go back to your Claude login. The lines are kept in the plugin's settings on this
 Mac, in plain text.
 
-Adding `claude-agent-acp` as a custom agent with the same lines works too, but a custom agent isn't
-isolated: Claude Code then sends its whole toolset (several times the prompt, so slower answers on
-a local model) and reads your Claude settings and MCP servers.
+Use the built-in Claude Code rather than adding `claude-agent-acp` as a custom agent: a custom
+agent isn't isolated. Claude Code then sends its whole toolset (several times the prompt, so slower
+answers on a local model), reads your Claude settings and MCP servers, and runs in your own
+permission mode; if that's Auto, a local model has every tool refused.
 
 **Codex** works with a server that speaks the OpenAI Responses API: its ACP adapter passes
 Toolbelt's MCP server through, and Codex supports custom model providers. Keep it apart from your

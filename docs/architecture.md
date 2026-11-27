@@ -75,7 +75,12 @@ ignored (agents that log to stdout).
 - For Claude Code the session's `_meta.claudeCode.options` (`CLAUDE_ISOLATION`) sets `tools: []`
   (no built-in tools), `settingSources: []` (none of the person's Claude settings, hooks or
   permission rules), `strictMcpConfig: true` (none of their MCP servers) and
-  `allowDangerouslySkipPermissions: false`.
+  `allowDangerouslySkipPermissions: false`. Its adapter still starts the session in the person's
+  `permissions.defaultMode` (it reads their settings itself), often Auto, which decides without
+  asking and, through another endpoint such as a local model, refuses every tool. So after
+  `session/new` or `session/load`, when the reported modes aren't already `default`, the session
+  asks for `session/set_mode` `default` (`CLAUDE_MODE`), where every tool call becomes a
+  permission request (below).
 - The first prompt carries `PREAMBLE`, which tells the agent where it is and which Toolbelt tools
   it has; follow-ups reuse the session.
 - Permission requests are allowed (`allow_once`) only for Toolbelt's MCP tools
