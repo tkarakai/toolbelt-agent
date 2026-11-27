@@ -36,7 +36,7 @@ try {
 	const env = { PATH: "/usr/bin:/bin", HOME: root, SHELL: "/bin/sh", TOOLBELT_PLUGIN: m.id, TOOLBELT_PLUGIN_VERSION: m.version, TOOLBELT_DATA_DIR: data, TOOLBELT_PACKAGE_ROOT: pkg, TOOLBELT_AGENT_COMMAND: JSON.stringify([process.execPath, "/nonexistent/cli.js", "--socket", join(root, "agent.sock")]) };
 	const proc = Bun.spawn([process.execPath, join(pkg, "index.js")], { cwd: root, env, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 15000 });
 	const send = (msg: unknown) => proc.stdin.write(JSON.stringify(msg) + "\n");
-	send({ type: "hello", protocol: 2, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.7.0" } });
+	send({ type: "hello", protocol: 2, capabilities: m.capabilities.required, plugin: { id: m.id }, host: { name: "verify", version: "0.7.1" } });
 	let buffer = "";
 	let step = "ready";
 	for await (const bytes of proc.stdout) {

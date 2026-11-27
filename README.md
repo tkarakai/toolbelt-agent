@@ -12,7 +12,7 @@ behind it, so you keep working while you talk to the agent.
 
 1. In Toolbelt's plugin manager, enter `tkarakai/toolbelt-agent`, review the release and publisher,
    and approve execution. Plugin code runs with your user privileges; process isolation is not a
-   security sandbox. Requires Toolbelt 0.7.0 or later.
+   security sandbox. Requires Toolbelt 0.7.1 or later.
 2. Turn on **Settings → Agents → Let agents use ToolBelt**, and choose there which plugins agents
    may read.
 3. Press **⌘K** (or click **Agent** at the bottom of the sidebar). The first time, the window opens
