@@ -4,7 +4,7 @@
   "name": "Agent",
   "description": "Ask an AI agent about your tools: an ask bar that grows into a chat over whatever screen you're on. Uses Claude Code, Codex, Gemini CLI or another ACP agent with your own login.",
   "icon": "sparkles",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "protocol": 2,
   "agent": {
     "access": "none"
