@@ -54,9 +54,54 @@ another model or server, and keeps its isolation (below) with them. Commands are
 the app's minimal PATH. Agents run with that PATH and only `HOME`, `USER`, `LANG`, `LC_ALL`,
 `TMPDIR`, `SHELL` from the plugin's environment, plus the agent's own variables from its setup.
 
-Nothing is bundled or downloaded: each agent is the person's own installation and login. (Claude
+Nothing is downloaded. The other agents are the person's own installation and login. (Claude
 Code's adapter depends on the Claude Agent SDK, whose license doesn't allow redistributing it in
-this archive, and on Claude Code's native binary, larger than Toolbelt's archive limits.)
+this archive, and on Claude Code's native binary, larger than Toolbelt's archive limits.) The one
+bundled agent is the plugin's own Model API agent (below).
+
+## Model API agent
+
+`src/model-api/` is ToolBelt's own lightweight agent for any model server, local (oMLX,
+llama.cpp, Ollama, LM Studio) or hosted (OpenRouter, OpenAI, Anthropic, Gemini). It's built to
+`model-api.js` in the archive (minified, about 1.2 MB; about 300 KB of the archive) and runs as its
+own Bun process that speaks ACP like any other agent. It isn't in the agents list yet.
+
+- **Settings** (`config.ts`) arrive as `TOOLBELT_MODEL_API_*` variables:
+  - `PRESET` and `URL`: the server;
+  - `API`: `auto`, `chat`, `responses` or `messages`;
+  - `MODEL` and `KEY`;
+  - `THINKING`: `off`, `low`, `medium` or `high`;
+  - `MAX_OUTPUT`, `CONTEXT` and `MAX_STEPS`;
+  - `INSTRUCTIONS`: appended to the system prompt;
+  - `EXTRA`: a JSON object added to request bodies, which can't set the model, messages or tools;
+  - `STATE`: where chats are kept.
+
+  A preset supplies the address, the best API (`auto`), how thinking is switched over Chat
+  Completions (`chat_template_kwargs.enable_thinking`, `reasoning_effort` or OpenRouter's
+  `reasoning`) and a default context size. A settings problem is reported as the error of
+  `session/new`, so **Test** shows it.
+- **Requests** go through pi-ai (`models.ts`): one provider with one model, over Chat
+  Completions, Responses or Anthropic Messages. The three API modules are imported up front: a
+  bundled lazy import left pi-ai's telemetry uninitialized. The process replaces `fetch` with one
+  that refuses every address but the configured server's origin and adds the extra fields
+  (`serverFetch`).
+- **Chats** (`agent.ts`) are pi-durable conversations:
+  - Each is stored as JSONL in `STATE/<session id>/`, or in memory without `STATE`, which also
+    turns off `loadSession`.
+  - The only tools are ToolBelt's MCP tools, through a small stdio MCP client (`mcp.ts`) started
+    from the command in `session/new`. The MCP server gets the plugin's environment without the
+    `TOOLBELT_MODEL_API_*` variables.
+  - The system prompt is ToolBelt's MCP instructions, the date and time when the chat was opened
+    (fixed, so the server's prompt cache holds), and the person's instructions. The plugin's
+    preamble arrives in the first message, as with every agent.
+  - Partial answers and thinking are streamed from pi-durable's live state as
+    `agent_message_chunk` and `agent_thought_chunk`. Tool calls are reported by the tools
+    themselves (`tool_call` titled `toolbelt.<tool>`, then `tool_call_update`).
+  - A cancel aborts the run.
+  - A run that fails is answered with an error worded for the person: the server is unreachable,
+    the key was refused, the model is unknown, or the conversation is too long.
+- **ACP** (`server.ts`) offers `initialize`, `session/new`, `session/load` (which replays the user
+  and agent messages), `session/prompt` and `session/cancel`. It never asks the client anything.
 
 ## ACP client and session
 
@@ -150,4 +195,8 @@ refused tools, problems, stop, test starts) and every view, validated against th
 schema, and settings loading (the first version's file, bad values, the mirrored fields).
 `scripts/verify-package.ts` runs the built archive like Toolbelt does: the first-run agents list,
 adding a custom agent and switching to it (a tiny stdio ACP agent that only opens sessions), the
-ask bar, a question whose chat is saved, prepare and shutdown.
+ask bar, a question whose chat is saved, the bundled Model API agent answering `initialize` and
+reporting a missing model, then prepare and shutdown. `test/model-api.test.ts` covers the Model API
+agent's settings, the server-only `fetch`, a conversation over each API against a fake server
+(`test/model-api-fakes.ts`), errors, cancelling, reopening a kept chat in a new process, and the
+agent process, from source and from a fresh bundle, with a real MCP server process.
