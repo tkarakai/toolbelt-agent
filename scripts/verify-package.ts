@@ -55,10 +55,10 @@ try {
 				if (msg.surface !== "floating" || msg.tree.type !== "floating") throw Error("Expected a floating tree");
 				const event = (name: string, payload: unknown = {}) => send({ type: "event", surface: "floating", instance: "person", name, payload });
 				if (step === "settings") {
-					if (msg.tree.subtitle !== "Agents") throw Error("First run should list the agents");
+					if (msg.tree.subtitle !== "Agent settings") throw Error("First run should list the agents");
 					step = "add";
 					event("open-agent", { list: "agents", item: "add" });
-				} else if (step === "add" && msg.tree.subtitle === "Custom agent") {
+				} else if (step === "add" && msg.tree.subtitle === "Custom agent settings") {
 					step = "use";
 					event("field", { form: "agent", field: "name", value: "Fake" });
 					event("field", { form: "agent", field: "command", value: `${process.execPath} ${fake}` });
