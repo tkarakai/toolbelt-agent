@@ -84,7 +84,17 @@ try {
 	if (saved.active !== "custom:1" || saved.custom[0]?.name !== "Fake" || !saved.tested["custom:1"]?.ok) throw Error("The agent switched to was not saved");
 	const savedChats = JSON.parse(readFileSync(join(data, "threads", "index.json"), "utf8"));
 	if (savedChats.length !== 1 || savedChats[0].title !== "Say hello" || savedChats[0].count !== 2) throw Error("The chat was not saved");
-	console.log("Clean package: the first-run agents list, adding and switching to an agent, the ask bar, a saved chat, prepare and shutdown pass.");
+	// The bundled Model API agent starts on its own (no node_modules), answers ACP, and reports a
+	// settings problem for the session instead of failing to start.
+	const agent = Bun.spawn([process.execPath, join(pkg, "model-api.js")], { cwd: root, env: { PATH: "/usr/bin:/bin", HOME: root, TOOLBELT_MODEL_API_PRESET: "omlx" }, stdin: "pipe", stdout: "pipe", stderr: "inherit", timeout: 15000 });
+	agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: 1 } }) + "\n");
+	agent.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 2, method: "session/new", params: { cwd: root, mcpServers: [{ name: "toolbelt", command: "/nonexistent", args: [], env: [] }] } }) + "\n");
+	agent.stdin.end();
+	const replies = (await new Response(agent.stdout).text()).trim().split("\n").map((l) => JSON.parse(l));
+	if (replies[0]?.result?.agentInfo?.name !== "toolbelt-model-api" || replies[0].result.agentInfo.version !== version) throw Error("The Model API agent didn't introduce itself");
+	if (!/No model/.test(replies[1]?.error?.message ?? "")) throw Error("The Model API agent didn't report its missing model");
+	if ((await agent.exited) !== 0) throw Error("The Model API agent didn't exit cleanly");
+	console.log("Clean package: the first-run agents list, adding and switching to an agent, the ask bar, a saved chat, the Model API agent, prepare and shutdown pass.");
 } finally {
 	rmSync(root, { recursive: true, force: true });
 }
