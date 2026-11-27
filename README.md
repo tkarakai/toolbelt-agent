@@ -30,7 +30,8 @@ behind it, so you keep working while you talk to the agent.
    starts an agent and connects it to Toolbelt without asking anything. Claude Code's setup takes
    environment lines, to use a local model (such as oMLX) instead of your login. Other agents and local
    models (add as many custom ACP agents as you like):
-   [docs/other-agents.md](docs/other-agents.md).
+   [docs/other-agents.md](docs/other-agents.md); [docs/local-models.md](docs/local-models.md) covers
+   local models: setups, server settings and what to expect.
 4. Ask. The bar grows into a chat. The agent reads screens on its own; the first time it wants to
    change what you see (say, filter OnTrack to overdue tasks), Toolbelt asks you, and its "Shown by"
    note offers Restore.

@@ -25,24 +25,9 @@ API (`http://localhost:<port>/v1`), and some (oMLX among them) also Anthropic's 
 a model that handles tool calls well; small models often don't call tools at all and answer from
 nothing.
 
-**Claude Code** suits a server that speaks the Messages API (or a proxy that translates it). Open
-**Claude Code** in the agents list and fill in its **Environment**, for example for oMLX:
-
-```
-ANTHROPIC_BASE_URL=http://127.0.0.1:8000
-ANTHROPIC_AUTH_TOKEN=<the server's API key, if it has one>
-ANTHROPIC_MODEL=Qwen3.8-27B-4bit
-ANTHROPIC_DEFAULT_HAIKU_MODEL=Qwen3.8-27B-4bit
-MAX_THINKING_TOKENS=0
-CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-```
-
-`ANTHROPIC_MODEL` is the model as the server names it; the Haiku line keeps Claude Code's small
-background requests on the same server, and `MAX_THINKING_TOKENS=0` turns thinking off (often
-faster on a local model). The built-in Claude Code starts without its own tools, settings and MCP
-servers, so a local model gets a short prompt: ToolBelt's tools and little else. Clear the
-Environment to go back to your Claude login. The lines are kept in the plugin's settings on this
-Mac, in plain text.
+**Claude Code** suits a server that speaks the Messages API: open **Claude Code** in the agents
+list and fill in its **Environment**. [Local models](local-models.md) has the lines, including
+the ones that keep everything on your Mac, and how to set up the server and what to expect.
 
 Use the built-in Claude Code rather than adding `claude-agent-acp` as a custom agent: a custom
 agent isn't isolated. Claude Code then sends its whole toolset (several times the prompt, so slower
