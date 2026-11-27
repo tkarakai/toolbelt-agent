@@ -13,6 +13,8 @@ export class FakeAgent {
 	/** The permission modes session/new and session/load report, and the set_mode requests received. */
 	modes: { currentModeId: string; availableModes: { id: string }[] } | null = null;
 	setMode: any[] = [];
+	/** What `_toolbelt/probe` answers (the Model API agent's Test), when set. */
+	probe: unknown = null;
 	private onLine: (line: string) => void = () => {};
 	private onClose: (reason: string) => void = () => {};
 	private next = 1000;
@@ -69,6 +71,8 @@ export class FakeAgent {
 		else if (m.method === "session/new") {
 			this.newSession = m.params;
 			reply({ sessionId: "s1", ...(this.modes ? { modes: this.modes } : {}) });
+		} else if (m.method === "_toolbelt/probe" && this.probe) {
+			reply(this.probe);
 		} else if (m.method === "session/set_mode") {
 			this.setMode.push(m.params);
 			reply({});

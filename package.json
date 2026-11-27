@@ -16,7 +16,7 @@
     "@earendil-works/chord": "1.6.1",
     "@earendil-works/pi-ai": "1.6.1",
     "@earendil-works/pi-durable": "1.6.1",
-    "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.5.1/toolbelt-sdk-0.5.1.tgz"
+    "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.6.0/toolbelt-sdk-0.6.0.tgz"
   },
   "devDependencies": {
     "@types/bun": "1.4.4",

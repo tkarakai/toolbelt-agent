@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { validateTree } from "@toolbelt/sdk/validation";
 import type { Node } from "@toolbelt/sdk";
-import { DEFAULTS, type Settings } from "../src/settings";
+import { DEFAULTS, MODEL_API_DEFAULTS, type Settings } from "../src/settings";
 import { askSuggestions, floating, SUGGESTIONS, type ViewState } from "../src/ui";
 import type { ThreadMeta } from "../src/threads";
 
@@ -33,16 +33,18 @@ test("first run lists every agent, with no way back to a chat yet", () => {
 	const t = view({ settings: DEFAULTS });
 	expect(t).toMatchObject({ mode: "panel", subtitle: "Agents", actions: [] });
 	const items = list(t).items;
-	expect(items.map((i) => i.title)).toEqual(["Claude Code", "Codex", "Gemini CLI", "Add an ACP agent…"]);
-	expect(items[0]).toMatchObject({ subtitle: "Installed", actions: [{ id: "use", inline: true }] });
-	expect(items[1]).toMatchObject({ subtitle: "Not installed", actions: [] });
+	expect(items.map((i) => i.title)).toEqual(["Model API", "Claude Code", "Codex", "Gemini CLI", "Add an ACP agent…"]);
+	// The Model API agent needs a model before it can be used.
+	expect(items[0]).toMatchObject({ subtitle: "oMLX · no model yet", actions: [] });
+	expect(items[1]).toMatchObject({ subtitle: "Installed", actions: [{ id: "use", inline: true }] });
+	expect(items[2]).toMatchObject({ subtitle: "Not installed", actions: [] });
 });
 
 test("the agents list marks the one in use and remembers each agent's last start", () => {
 	const settings: Settings = {
 		...DEFAULTS,
 		active: "custom:1",
-		custom: [{ id: "1", name: "oMLX", command: "codex-acp --profile local", env: "" }],
+		custom: [{ id: "1", name: "oMLX", command: "codex-acp --profile local", vars: [] }],
 		tested: { "custom:1": { ok: true, at: base.now - 5 * 60_000, text: "ok" }, claude: { ok: false, at: base.now, text: "Not logged in. Run claude." } },
 	};
 	const t = view({ settings, page: { view: "agents" } });
@@ -56,19 +58,19 @@ test("the agents list marks the one in use and remembers each agent's last start
 });
 
 test("an inactive custom agent can be deleted, after a confirmation", () => {
-	const settings: Settings = { ...DEFAULTS, active: "claude", custom: [{ id: "2", name: "", command: "x --acp", env: "" }], tested: {} };
+	const settings: Settings = { ...DEFAULTS, active: "claude", custom: [{ id: "2", name: "", command: "x --acp", vars: [] }], tested: {} };
 	const row = list(view({ settings, page: { view: "agents" } })).items.find((i) => i.id === "custom:2")!;
 	expect(row.title).toBe("Custom agent");
 	expect(row.actions!.find((a) => a.id === "delete")).toMatchObject({ tone: "destructive", confirm: expect.stringContaining("Delete Custom agent?") });
 });
 
 test("a custom agent's page edits a draft; saving the one in use starts it first", () => {
-	const settings: Settings = { ...DEFAULTS, active: "custom:1", custom: [{ id: "1", name: "Local", command: "a --acp", env: "" }], tested: {} };
+	const settings: Settings = { ...DEFAULTS, active: "custom:1", custom: [{ id: "1", name: "Local", command: "a --acp", vars: [] }], tested: {} };
 	const clean = view({ settings, page: { view: "agent", id: "custom:1" } });
 	expect(clean).toMatchObject({ subtitle: "Local", actions: [{ id: "back" }] });
 	expect((clean.children[0] as any).fields.map((f: any) => f.id)).toEqual(["name", "command", "env"]);
 	expect(card(clean).actions!.map((a) => a.id)).toEqual(["test"]);
-	const drafts = new Map([["custom:1" as const, { id: "1", name: "Local", command: "b --acp", env: "" }]]);
+	const drafts = new Map([["custom:1" as const, { id: "1", name: "Local", command: "b --acp", vars: [] }]]);
 	const edited = view({ settings, drafts, page: { view: "agent", id: "custom:1" } });
 	expect((edited.children[0] as any).fields[1].value).toBe("b --acp");
 	expect(card(edited).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
@@ -121,7 +123,7 @@ test("problems show with what to do", () => {
 
 
 test("on first run, an agent's page opens from the list", () => {
-	const drafts = new Map([["custom:1" as const, { id: "1", name: "", command: "", env: "" }]]);
+	const drafts = new Map([["custom:1" as const, { id: "1", name: "", command: "", vars: [] }]]);
 	const t = view({ settings: DEFAULTS, drafts, page: { view: "agent", id: "custom:1" } });
 	expect(t.subtitle).toBe("Custom agent");
 	expect(card(t).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
@@ -169,20 +171,58 @@ test("the agents settings say how long chats are kept and offer Delete all", () 
 	expect((t.children.find((c) => c.type === "card" && (c as any).id === "saved") as any).actions[0]).toMatchObject({ id: "clear-threads", tone: "destructive" });
 });
 
-test("Claude Code's page edits its environment lines as a draft; saving the one in use starts it first", () => {
-	const settings: Settings = { ...DEFAULTS, active: "claude", env: { claude: "ANTHROPIC_MODEL=a" } };
+const v = (key: string, value: string, secret = false) => ({ key, value, selected: true, secret });
+
+test("Claude Code's page edits its environment variables as a draft, secret ones in the Keychain", () => {
+	const settings: Settings = { ...DEFAULTS, active: "claude", vars: { claude: [v("ANTHROPIC_MODEL", "a"), v("ANTHROPIC_AUTH_TOKEN", "", true)] } };
 	const clean = view({ settings, page: { view: "agent", id: "claude" } });
 	const form = clean.children.find((c) => c.type === "form") as any;
-	expect(form.fields).toMatchObject([{ type: "textarea", id: "env", value: "ANTHROPIC_MODEL=a" }]);
+	expect(form.fields).toMatchObject([{ type: "environment", id: "env", secretPrefix: "agents/claude/env", value: [v("ANTHROPIC_MODEL", "a"), v("ANTHROPIC_AUTH_TOKEN", "", true)] }]);
 	expect(card(clean).actions!.map((a) => a.id)).toEqual(["test"]);
-	const drafts = new Map([["claude" as const, { id: "claude", name: "", command: "", env: "ANTHROPIC_MODEL=b" }]]);
+	const drafts = new Map([["claude" as const, { id: "claude", name: "", command: "", vars: [v("ANTHROPIC_MODEL", "b"), v("ANTHROPIC_AUTH_TOKEN", "", true)] }]]);
 	const edited = view({ settings, drafts, page: { view: "agent", id: "claude" } });
-	expect((edited.children.find((c) => c.type === "form") as any).fields[0].value).toBe("ANTHROPIC_MODEL=b");
+	expect((edited.children.find((c) => c.type === "form") as any).fields[0].value[0].value).toBe("b");
 	expect(card(edited).actions!.map((a) => a.id)).toEqual(["test", "discard", "use"]);
 	expect(card(edited).actions!.find((a) => a.id === "use")!.label).toBe("Save");
 	const row = list(view({ settings, drafts, page: { view: "agents" } })).items.find((i) => i.id === "claude")!;
 	expect(row.subtitle).toBe("Unsaved changes");
-	expect(list(view({ settings, drafts, page: { view: "agents" } })).items.map((i) => i.id)).toEqual(["claude", "codex", "gemini", "add"]);
+	expect(list(view({ settings, drafts, page: { view: "agents" } })).items.map((i) => i.id)).toEqual(["model-api", "claude", "codex", "gemini", "add"]);
 	// Agents that don't take environment lines have no form.
 	expect(view({ page: { view: "agent", id: "gemini" } }).children.some((c) => c.type === "form")).toBe(false);
+});
+
+const modelApi = (m: Partial<typeof MODEL_API_DEFAULTS> = {}) => ({ ...MODEL_API_DEFAULTS, ...m });
+const cardById = (t: ReturnType<typeof view>, id: string) => t.children.find((c) => c.type === "card" && (c as any).id === id) as any;
+
+test("the Model API page: server, key in the Keychain, models, thinking, and where chats go", () => {
+	const settings: Settings = { ...DEFAULTS, modelApi: modelApi({ preset: "omlx", model: "Qwen3.8-27B-4bit" }) };
+	const t = view({ settings, page: { view: "agent", id: "model-api" }, models: { state: "ok", list: [{ id: "Qwen3.8-27B-4bit", context: 65536 }, { id: "small" }] } });
+	expect(t.subtitle).toBe("Model API");
+	const server = cardById(t, "server");
+	expect(server).toMatchObject({ title: "oMLX", description: "Stays on this Mac" });
+	const fields = server.children[0].fields;
+	expect(fields.map((f: any) => f.id)).toEqual(["preset", "url", "key", "model", "thinking"]);
+	expect(fields[2]).toMatchObject({ type: "text", secret: "model-api/key", value: "" });
+	expect(fields[3].options).toEqual([{ value: "Qwen3.8-27B-4bit", label: "Qwen3.8-27B-4bit", sub: "66k context" }, { value: "small", label: "small" }]);
+	expect(cardById(t, "advanced")).toMatchObject({ collapsible: true, description: "Chat Completions (automatic) · up to 12 tool steps per answer" });
+	expect(cardById(t, "guide")).toMatchObject({ collapsible: true, description: "Running a model on this Mac" });
+	expect(cardById(t, "guide").open).toBeUndefined();
+	// Hosted: where chats go, and a server without keys has no key field.
+	const hosted = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "openrouter" }) }, page: { view: "agent", id: "model-api" } });
+	expect(cardById(hosted, "server").description).toBe("Sends chats to openrouter.ai");
+	expect(cardById(hosted, "guide").description).toBe("Using a hosted model");
+	const ollama = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "ollama" }) }, page: { view: "agent", id: "model-api" } });
+	expect(cardById(ollama, "server").children[0].fields.map((f: any) => f.id)).toEqual(["preset", "url", "model", "thinking"]);
+	expect(cardById(ollama, "guide").children[0].text).toContain("OLLAMA_CONTEXT_LENGTH");
+});
+
+test("a failed Model API test opens “Before you start” at what went wrong", () => {
+	const settings: Settings = { ...DEFAULTS, modelApi: modelApi({ model: "tiny" }) };
+	const t = view({ settings, page: { view: "agent", id: "model-api" }, tests: { "model-api": { state: "failed", text: "tiny answered without calling a tool.", guide: "tools" } } });
+	expect(cardById(t, "guide").open).toBe(true);
+	expect(cardById(t, "guide").children[0].text).toStartWith("**The model answered without calling a tool.**");
+	expect(cardById(t, "connection").children[0]).toMatchObject({ tone: "danger", text: expect.stringContaining("See “Before you start”") });
+	// The model list's state shows under the model field.
+	const failed = view({ settings, page: { view: "agent", id: "model-api" }, models: { state: "failed", text: "The server refused the API key." } });
+	expect(cardById(failed, "server").children[0].fields.find((f: any) => f.id === "model").description).toContain("refused the API key");
 });

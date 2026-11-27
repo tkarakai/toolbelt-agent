@@ -15,6 +15,8 @@ const context = BACKGROUND_CONTEXT;
 
 export type Update = Record<string, unknown> & { sessionUpdate: string };
 export type StopReason = "end_turn" | "max_turn_requests" | "cancelled";
+/** How a probe went: `server` (unreachable, refused, unknown model…), `tools` (no tool call), `model` (not configured). */
+export type Probe = { ok: true; text: string; ms: number } | { ok: false; reason: "server" | "tools" | "model"; text: string; ms?: number };
 
 /** Starts ToolBelt's MCP server for a chat. */
 export type McpStarter = () => McpTransport;
@@ -94,6 +96,33 @@ export class ModelApiAgent {
 		} finally {
 			chat.report = null;
 		}
+	}
+
+	/**
+	 * One small request with a single `ping` tool: whether the server answers and the model calls
+	 * tools at all (small models often answer without calling any). For the settings' Test.
+	 */
+	async probe(): Promise<Probe> {
+		const c = this.config;
+		const models = createModels();
+		models.setProvider(piProvider(c));
+		const model = models.getModel(PROVIDER, c.model);
+		if (!model) return { ok: false, reason: "model", text: `No model "${c.model}".` };
+		const started = Date.now();
+		const answer = await models.completeSimple(
+			model,
+			{
+				systemPrompt: "You are checking that tool calls work. Call the ping tool now, without writing anything else.",
+				messages: [{ role: "user", content: "Call the ping tool.", timestamp: started }],
+				tools: [{ name: "ping", description: "Answers pong. Call it when you're asked to.", parameters: { type: "object", properties: {}, additionalProperties: false } }],
+			},
+			{ ...(c.thinking === "off" ? {} : { reasoning: c.thinking }), maxTokens: Math.min(c.maxOutput, 1024) } as never,
+		);
+		const ms = Date.now() - started;
+		const content = (answer.content ?? []) as { type: string }[];
+		if (answer.stopReason === "error" || answer.stopReason === "aborted") return { ok: false, reason: "server", text: this.explain((answer as { errorMessage?: string }).errorMessage), ms };
+		if (content.some((x) => x.type === "toolCall")) return { ok: true, text: `${c.model} answered in ${(ms / 1000).toFixed(1)} s and called a tool.`, ms };
+		return { ok: false, reason: "tools", text: `${c.model} answered without calling a tool, so it would answer without reading ToolBelt.`, ms };
 	}
 
 	async cancel(id: string) {

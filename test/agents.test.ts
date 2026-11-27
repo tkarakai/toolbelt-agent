@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseEnv, resolveAgent, splitCommand, which } from "../src/agents";
+import { modelApiCommand, parseEnv, resolveAgent, splitCommand, which } from "../src/agents";
 
 const dir = mkdtempSync(join(tmpdir(), "agent-bin-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -35,7 +35,7 @@ test("finds an agent's ACP command on the path, or says how to install it", () =
 
 test("a custom agent runs its own command with its environment", () => {
 	tool("my-agent");
-	expect(resolveAgent({ agent: "custom", customName: "Local", customCommand: "my-agent --acp", customEnv: "OPENAI_BASE_URL=http://localhost:8000/v1" }, dir)).toEqual({
+	expect(resolveAgent({ agent: "custom", customName: "Local", customCommand: "my-agent --acp", env: { OPENAI_BASE_URL: "http://localhost:8000/v1" } }, dir)).toEqual({
 		ok: true,
 		id: "custom",
 		name: "Local",
@@ -44,17 +44,13 @@ test("a custom agent runs its own command with its environment", () => {
 	});
 	expect(resolveAgent({ agent: "custom", customCommand: "" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("Enter the command") });
 	expect(resolveAgent({ agent: "custom", customCommand: "missing-agent" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("can't find `missing-agent`") });
-	expect(resolveAgent({ agent: "custom", customCommand: "my-agent", customEnv: "bad" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("NAME=value") });
+	expect(resolveAgent({ agent: "custom", customCommand: "'my-agent" }, dir)).toMatchObject({ ok: false, reason: expect.stringContaining("unclosed quote") });
 });
 
-test("Claude Code takes environment lines from its setup; agents without the field don't", () => {
-	tool("claude-agent-acp");
-	tool("gemini");
-	expect(resolveAgent({ agent: "claude", env: "# oMLX\nANTHROPIC_BASE_URL=http://127.0.0.1:8000\nANTHROPIC_MODEL=Qwen" }, dir)).toMatchObject({
-		ok: true,
-		id: "claude",
-		env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8000", ANTHROPIC_MODEL: "Qwen" },
-	});
-	expect(resolveAgent({ agent: "claude", env: "oops" }, dir)).toMatchObject({ ok: false, id: "claude", reason: expect.stringContaining("NAME=value") });
-	expect(resolveAgent({ agent: "gemini", env: "A=1" }, dir)).toMatchObject({ ok: true, env: {} });
+test("the Model API agent is always there: ToolBelt's Bun running the bundled agent", () => {
+	const r = resolveAgent({ agent: "model-api", env: { TOOLBELT_MODEL_API_MODEL: "qwen" } }, "/nonexistent");
+	expect(r).toMatchObject({ ok: true, id: "model-api", name: "Model API", env: { TOOLBELT_MODEL_API_MODEL: "qwen" } });
+	expect((r as { command: string[] }).command[0]).toBe(process.execPath);
+	expect(modelApiCommand("/pkg")).toEqual([process.execPath, "/pkg/model-api/main.ts"]);
 });
+

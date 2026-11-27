@@ -71,6 +71,9 @@ export class ModelApiServer {
 				for (const update of history) this.update(params.sessionId, update);
 				return {};
 			}
+			// The settings' Test: one request with a `ping` tool (an ACP extension method).
+			case "_toolbelt/probe":
+				return this.ensure().probe();
 			case "session/prompt": {
 				const text = ((params.prompt ?? []) as { type: string; text?: string }[])
 					.filter((b) => b.type === "text")

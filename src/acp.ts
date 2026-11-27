@@ -4,7 +4,7 @@
 // `session/request_permission`. https://agentclientprotocol.com
 //
 // Only what the chat needs is here: initialize, session/new, session/load, session/set_mode,
-// session/prompt and session/cancel.
+// session/prompt, session/cancel and extension methods (`_toolbelt/probe`).
 
 export const PROTOCOL_VERSION = 1;
 
@@ -110,6 +110,11 @@ export class AcpClient {
 
 	prompt(sessionId: string, prompt: ContentBlock[]) {
 		return this.request<{ stopReason: StopReason }>("session/prompt", { sessionId, prompt });
+	}
+
+	/** An extension method the agent offers (ACP's `_`-prefixed methods), such as `_toolbelt/probe`. */
+	ext<T>(method: `_${string}`, params: unknown) {
+		return this.request<T>(method, params);
 	}
 
 	cancel(sessionId: string) {

@@ -105,6 +105,22 @@ test("Test connection starts the agent and its session, and closes them", async 
 	expect(agent.sent.some((m) => m.method === "session/prompt")).toBe(false);
 });
 
+test("Test asks the Model API agent's model one question with a tool, and says what failed", async () => {
+	const modelApi = { resolve: async () => ({ ok: true as const, id: "model-api" as const, name: "Model API", command: ["/bun", "/pkg/model-api.js"], env: {} }) };
+	const good = session(undefined, modelApi);
+	good.agent.probe = { ok: true, text: "qwen answered in 1.2 s and called a tool." };
+	expect(await good.s.check()).toBe("Fake Agent 9.9 started and connected to ToolBelt. qwen answered in 1.2 s and called a tool.");
+	const quiet = session(undefined, modelApi);
+	quiet.agent.probe = { ok: false, reason: "tools", text: "tiny answered without calling a tool." };
+	const failed = await quiet.s.check().catch((e) => e);
+	expect(failed).toMatchObject({ message: "tiny answered without calling a tool.", guide: "tools" });
+	expect(quiet.agent.closed).toBe(true);
+	// Other agents aren't asked anything.
+	const claude = session();
+	await claude.s.check();
+	expect(claude.agent.sent.some((m) => m.method === "_toolbelt/probe")).toBe(false);
+});
+
 const saved = [
 	{ role: "user" as const, text: "What's overdue?" },
 	{ role: "assistant" as const, text: "Three tasks." },

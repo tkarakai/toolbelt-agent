@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Requires Toolbelt 0.8.0 (SDK 0.6.0), for secrets kept in your Mac's Keychain and collapsible cards.
+- **Model API: ToolBelt's own agent, for a model of your choice.** The first entry in the agents list talks to any model server: on this Mac (oMLX, llama.cpp, Ollama, LM Studio) or hosted (OpenRouter, OpenAI, Anthropic, Gemini). Choose the server and a model from its list, and thinking; its API key is kept in your Mac's Keychain. It says where chats go ("Stays on this Mac" or "Sends chats to …") and only ever connects to that address. On a 27B model on oMLX it answers in about 10 s, twice as fast as Claude Code on the same model.
+- **Test checks the model, too.** For Model API, Test asks the model one small question with a tool and says how long it took and whether the model called the tool. If something's wrong, "Before you start" opens at what to check on the server.
+- **Secrets in the Keychain.** Claude Code's and custom agents' environment is now a list of variables. Ones whose names look secret (`ANTHROPIC_AUTH_TOKEN`, …) are locked: Toolbelt keeps their values in your Mac's Keychain, not in the plugin's settings. Tokens saved as plain text before are moved into the Keychain once, and the chat says so.
 
 ## 0.3.0 — 2026-11-27
 - Claude Code no longer runs in your own Claude Code permission mode. If yours was Auto, a Claude Code using another endpoint (such as a local model) had every Toolbelt tool refused; now it asks the plugin, which allows Toolbelt's tools and nothing else, whatever your mode.

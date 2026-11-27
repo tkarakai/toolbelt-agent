@@ -8,7 +8,7 @@
         "@earendil-works/chord": "1.6.1",
         "@earendil-works/pi-ai": "1.6.1",
         "@earendil-works/pi-durable": "1.6.1",
-        "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.5.1/toolbelt-sdk-0.5.1.tgz",
+        "@toolbelt/sdk": "https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.6.0/toolbelt-sdk-0.6.0.tgz",
       },
       "devDependencies": {
         "@types/bun": "1.4.4",
@@ -107,7 +107,7 @@
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 
-    "@toolbelt/sdk": ["@toolbelt/sdk@https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.5.1/toolbelt-sdk-0.5.1.tgz", { "bin": { "toolbelt-release": "./release/cli.js" } }, "sha512-gKeodgfy3oppqEDFMJEETqqMtlYsyM5WaxGXvkh7/bI+2Kgijw/hawi0/bFU6FHmWOblARJEJzGOK0CWbCbcGQ=="],
+    "@toolbelt/sdk": ["@toolbelt/sdk@https://github.com/tkarakai/toolbelt/releases/download/sdk-v0.6.0/toolbelt-sdk-0.6.0.tgz", { "bin": { "toolbelt-release": "./release/cli.js" } }, "sha512-fS6Vhg7yTAwYVCbDGlOd3WSja/2c9D9Q4j/pLcn1IYR4O5J8n0pbqfxnMIzVCh/B5LcEnIqmppkOIxdB52d6Ug=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 
