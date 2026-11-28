@@ -139,7 +139,9 @@ own Bun process that speaks ACP like any other agent. It's the agents list's **M
   Completions or Messages, `max_output_tokens: 16` over Responses, 180 s limit) at once and then
   every 60 s, skipping a round while a chat is answered. A real request, not a server's list of
   loaded models: oMLX kept listing a model whose engine had exited until a request came, and that
-  request reloads it. A check slower than 5 s means the server loaded the model, or was busy
+  request reloads it. An answer whose `model` isn't the one asked for (`sameModel`, allowing
+  `@variant` and `:latest`) is a failure: LM Studio answers an unknown model with whichever one is
+  loaded. A check slower than 5 s means the server loaded the model, or was busy
   (logged, and said under the switch).
 
   The person runs the server too (stops, upgrades, quits or uninstalls it, loads other models,

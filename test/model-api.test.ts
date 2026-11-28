@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig } from "../src/model-api/config";
+import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig, sameModel } from "../src/model-api/config";
 import { piModel, serverFetch } from "../src/model-api/models";
 import { ModelApiServer } from "../src/model-api/server";
 import { sweepUnusedSessions } from "../src/session";
@@ -100,6 +100,18 @@ describe("keeping the model loaded (pingModel)", () => {
 		expect(fake.seen[0]).toMatchObject({ path, body: { model: "small", ...limits } });
 		if (api === "messages") expect(fake.seen[0]!.headers["x-api-key"]).toBe("secret-key");
 		else expect(fake.seen[0]!.headers.authorization).toBe("Bearer secret-key");
+	});
+
+	test("a server that answers with another model (LM Studio, for a model it doesn't have) isn't keeping this one", async () => {
+		const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ model: "lfm3-1.7b-mlx@8bit", choices: [] }) });
+		cleanup.push(() => server.stop(true));
+		const url = `http://127.0.0.1:${server.port}/v1`;
+		await expect(pingModel({ url, api: "chat", key: "", model: "nope-model" })).rejects.toThrow('The server answered with "lfm3-1.7b-mlx@8bit" instead of "nope-model"');
+		await expect(pingModel({ url, api: "chat", key: "", model: "lfm3-1.7b-mlx" })).resolves.toMatchObject({ ms: expect.any(Number) });
+		expect(sameModel("qwen3:latest", "qwen3")).toBe(true);
+		expect(sameModel("Qwen/Qwen3-0.6B-GGUF:Q8_0", "Qwen/Qwen3-0.6B-GGUF:Q8_0")).toBe(true);
+		expect(sameModel("Qwen3.8-27B-4bit", "qwen3.8-27b-4bit")).toBe(true);
+		expect(sameModel("lfm3-1.7b-mlx@8bit", "qwen3.5-4b-mlx")).toBe(false);
 	});
 
 	test("says why it failed: no server, a refused key, an unknown model, a slow server", async () => {

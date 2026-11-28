@@ -211,7 +211,32 @@ export async function pingModel(c: Pick<Config, "url" | "api" | "key" | "model">
 	// LM Studio also answers 404 for a model it has but won't load on request: its message says which.
 	if (r.status === 404) throw new Error(`The server doesn't know the model "${c.model}"${detailOf(text) ? ` (${detailOf(text)})` : ""}.`);
 	if (!r.ok) throw new Error(`The server answered ${r.status}${detailOf(text) ? `: ${detailOf(text)}` : ""}.`);
+	// LM Studio answers a model it doesn't have with whichever model is loaded: that one isn't kept.
+	const answered = modelOf(text);
+	if (answered && !sameModel(answered, c.model)) throw new Error(`The server answered with "${answered}" instead of "${c.model}": it doesn't have that model, or couldn't load it.`);
 	return { ms: Date.now() - started };
+}
+
+/** The model a JSON answer says it came from, if it says. */
+function modelOf(text: string): string | null {
+	try {
+		const m = (JSON.parse(text) as { model?: unknown }).model;
+		return typeof m === "string" && m ? m : null;
+	} catch {
+		return null; // a stream or no JSON: nothing to compare
+	}
+}
+
+/**
+ * Whether a server's name for the model that answered is the one asked for. Servers add a variant
+ * (`lfm3-1.7b-mlx` answers as `lfm3-1.7b-mlx@8bit` in LM Studio, `qwen3` as `qwen3:latest` in Ollama).
+ */
+export function sameModel(answered: string, asked: string): boolean {
+	const norm = (m: string) => m.trim().toLowerCase().replace(/:latest$/, "");
+	const [a, b] = [norm(answered), norm(asked)];
+	if (a === b) return true;
+	const variant = (long: string, short: string) => ["@", ":"].some((sep) => long.startsWith(short + sep));
+	return variant(a, b) || variant(b, a) || a.split("/").pop() === b.split("/").pop();
 }
 
 /** A server's error message from its JSON body, shortened. */

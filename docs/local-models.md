@@ -83,13 +83,21 @@ The model's memory stays in use while it's on, and the GPU doesn't idle between 
 when you need the memory. The server's own setting is the first line of defense (see the servers
 below); this switch also covers a model engine that stopped.
 
-It works with any local server, through the same request a chat makes. What a check can do
-depends on the server: **oMLX** (measured) and **Ollama** load a model on request, so a check
-reloads a dropped one and keeps Ollama's idle timer (`OLLAMA_KEEP_ALIVE`, 5 minutes by default)
-from running out. **LM Studio** loads one on request only with just-in-time loading on; otherwise
-a check reports the model isn't loaded. **llama.cpp**'s `llama-server` serves the one model it was
-started with, so a check only tells you it's down. Ollama, LM Studio and llama.cpp aren't measured
-yet.
+It works with any local server, through the same request a chat makes. Measured on 2026-11-27,
+pinging with the model unloaded, then loaded, then after unloading it by hand:
+
+| Server | Loads a dropped model? | Measured |
+|---|---|---|
+| **oMLX** | Yes | 0.1 s loaded; 20–40 s to load a 27B model |
+| **llama.cpp**, `llama serve` with a models preset (router mode) | Yes, and its `--sleep-idle-seconds` timer sees the use | 6 ms loaded; 3.3 s to load a 0.6B model; reloaded after an unload |
+| **LM Studio**, just-in-time loading on | Yes, and its idle TTL (1 h by default) sees the use | 40 ms loaded; 14 s to load a 1.7B model the first time, 3 s after an unload |
+| **Ollama** | Should (it loads on request, and its `OLLAMA_KEEP_ALIVE` timer, 5 minutes by default, sees the use) | Not measured yet |
+| **llama.cpp**, `llama-server -m <model>` (one model) | No: it serves the model it was started with, so a check only tells you it's down | Not measured |
+
+LM Studio answers a request for a model it doesn't have with whichever model is loaded, so the
+check compares the model that answered with the one asked for (allowing a variant such as
+`lfm3-1.7b-mlx@8bit` for `lfm3-1.7b-mlx`) and reports a mismatch as a failure. With just-in-time
+loading off, LM Studio can't load the model on request: load it yourself, or turn that on.
 
 Each new chat starts with the same instructions and tools, so the server's prompt cache serves them
 to it: on oMLX a new chat's first request takes about a second to start instead of 4–5 s.
