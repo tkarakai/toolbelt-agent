@@ -7,7 +7,7 @@ import { createRegistry, defineExtension, defineTool, Harness, LiveDoc, MemorySt
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import type { Config } from "./config";
+import { substitution, type Config } from "./config";
 import { McpClient, type McpTool, type McpTransport } from "./mcp";
 import { piProvider, PROVIDER } from "./models";
 
@@ -15,8 +15,11 @@ const context = BACKGROUND_CONTEXT;
 
 export type Update = Record<string, unknown> & { sessionUpdate: string };
 export type StopReason = "end_turn" | "max_turn_requests" | "cancelled";
-/** How a probe went: `server` (unreachable, refused, unknown model…), `tools` (no tool call), `model` (not configured). */
-export type Probe = { ok: true; text: string; ms: number } | { ok: false; reason: "server" | "tools" | "model"; text: string; ms?: number };
+/**
+ * How a probe went: `server` (unreachable, refused, unknown model…), `tools` (no tool call), `model`
+ * (not configured), `substituted` (a server on this Mac answered with another model).
+ */
+export type Probe = { ok: true; text: string; ms: number } | { ok: false; reason: "server" | "tools" | "model" | "substituted"; text: string; ms?: number };
 
 /** Starts ToolBelt's MCP server for a chat. */
 export type McpStarter = () => McpTransport;
@@ -37,6 +40,8 @@ type Chat = {
 	seen: Set<number>;
 	stopWatch: () => Promise<unknown>;
 	calls: number;
+	/** Why the answer being written was stopped: another model answered. Nothing more of it is shown. */
+	substituted: string | null;
 };
 
 export class ModelApiAgent {
@@ -79,12 +84,14 @@ export class ModelApiAgent {
 		if (chat.report) throw new Error("Still answering the last message.");
 		chat.report = report;
 		chat.sentText = chat.sentThought = "";
+		chat.substituted = null;
 		try {
 			const submission = await chat.root.submit({ type: "input", content: text }, context);
 			const settled = await submission.wait(context);
 			// What the watch hasn't delivered yet: the end of the answer.
 			const page = await chat.root.entries({ order: "descending" } as never, 50, undefined, context);
 			for (const e of (page.items as unknown as Entry[]).reverse()) this.entry(chat, e);
+			if (chat.substituted) throw new Error(chat.substituted);
 			if (settled.status === "done") return "end_turn";
 			const reason = (settled as { reason?: { reason?: string; detail?: string } | string }).reason;
 			const why = typeof reason === "string" ? reason : reason?.reason;
@@ -120,6 +127,8 @@ export class ModelApiAgent {
 		);
 		const ms = Date.now() - started;
 		const content = (answer.content ?? []) as { type: string }[];
+		const other = substitution(c, (answer as { responseModel?: string }).responseModel);
+		if (other) return { ok: false, reason: "substituted", text: other, ms };
 		if (answer.stopReason === "error" || answer.stopReason === "aborted") return { ok: false, reason: "server", text: this.explain((answer as { errorMessage?: string }).errorMessage), ms };
 		if (content.some((x) => x.type === "toolCall")) return { ok: true, text: `${c.model} answered in ${(ms / 1000).toFixed(1)} s and called a tool.`, ms };
 		return { ok: false, reason: "tools", text: `${c.model} answered without calling a tool, so it would answer without reading ToolBelt.`, ms };
@@ -149,7 +158,7 @@ export class ModelApiAgent {
 			throw new Error(`Couldn't reach ToolBelt: ${(e as Error).message}`);
 		}
 		const tools = await mcp.tools();
-		const chat = { id, mcp, report: null, sentText: "", sentThought: "", seen: new Set<number>(), calls: 0 } as unknown as Chat;
+		const chat = { id, mcp, report: null, sentText: "", sentThought: "", seen: new Set<number>(), calls: 0, substituted: null } as unknown as Chat;
 		// The same for every chat, so the server's prompt cache serves it to each new chat too. The
 		// time isn't here: every message says when it was sent (the plugin's `sentAt`).
 		const sections = [
@@ -203,6 +212,8 @@ export class ModelApiAgent {
 			description: t.description ?? t.name,
 			parameters: t.inputSchema as never,
 			execute: async (args: unknown) => {
+				// Another model asked for this: don't run it (the answer is being stopped).
+				if (chat.substituted) throw new Error(chat.substituted);
 				const input = (args ?? {}) as Record<string, unknown>;
 				const toolCallId = `call-${++chat.calls}`;
 				const name = `toolbelt.${t.name}`;
@@ -221,12 +232,24 @@ export class ModelApiAgent {
 		});
 	}
 
+	/** Stops the answer when a server on this Mac answers with another model than the chosen one. */
+	private check(chat: Chat, answered: string | undefined) {
+		if (chat.substituted) return;
+		const other = substitution(this.config, answered);
+		if (!other) return;
+		chat.substituted = other;
+		this.o.log?.(other);
+		void chat.root.abort(context).catch(() => {});
+	}
+
 	/** A change to the conversation: stream the partial answer, settle finished ones. */
 	private live(chat: Chat, value: { entries?: Entry[]; docs?: Record<string, any> }) {
 		if (!chat.report) return;
 		for (const e of value.entries ?? []) this.entry(chat, e);
-		const partial = value.docs?.["pi.live"]?.generation?.message?.content as Content[] | undefined;
-		if (!partial) return;
+		const message = value.docs?.["pi.live"]?.generation?.message as { content?: Content[]; responseModel?: string } | undefined;
+		this.check(chat, message?.responseModel);
+		const partial = message?.content;
+		if (!partial || chat.substituted) return;
 		this.stream(chat, textOf(partial), thoughtOf(partial));
 	}
 
@@ -234,6 +257,8 @@ export class ModelApiAgent {
 		if (chat.seen.has(e.id)) return;
 		chat.seen.add(e.id);
 		if (e.kind !== "pi.assistant" || !chat.report) return;
+		for (const m of e.model ?? []) this.check(chat, (m as { responseModel?: string }).responseModel);
+		if (chat.substituted) return;
 		const content = (e.model ?? []).flatMap((m) => (Array.isArray(m.content) ? (m.content as Content[]) : []));
 		this.stream(chat, textOf(content), thoughtOf(content));
 		chat.sentText = chat.sentThought = "";

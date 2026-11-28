@@ -91,13 +91,29 @@ pinging with the model unloaded, then loaded, then after unloading it by hand:
 | **oMLX** | Yes | 0.1 s loaded; 20–40 s to load a 27B model |
 | **llama.cpp**, `llama serve` with a models preset (router mode) | Yes, and its `--sleep-idle-seconds` timer sees the use | 6 ms loaded; 3.3 s to load a 0.6B model; reloaded after an unload |
 | **LM Studio**, just-in-time loading on | Yes, and its idle TTL (1 h by default) sees the use | 40 ms loaded; 14 s to load a 1.7B model the first time, 3 s after an unload |
-| **Ollama** | Should (it loads on request, and its `OLLAMA_KEEP_ALIVE` timer, 5 minutes by default, sees the use) | Not measured yet |
+| **Ollama** | Yes, and its `OLLAMA_KEEP_ALIVE` timer (5 minutes by default) sees the use | 22 ms loaded; 2.8 s to load a 4B model, 1.6 s after an unload |
 | **llama.cpp**, `llama-server -m <model>` (one model) | No: it serves the model it was started with, so a check only tells you it's down | Not measured |
 
-LM Studio answers a request for a model it doesn't have with whichever model is loaded, so the
-check compares the model that answered with the one asked for (allowing a variant such as
-`lfm3-1.7b-mlx@8bit` for `lfm3-1.7b-mlx`) and reports a mismatch as a failure. With just-in-time
-loading off, LM Studio can't load the model on request: load it yourself, or turn that on.
+With just-in-time loading off, LM Studio can't load the model on request: load it yourself, or
+turn that on.
+
+### When the server answers with another model
+
+LM Studio answers a request for a model it doesn't have (a typo, a deleted model) with whichever
+model is loaded, and says so only in the answer's `model` field. With nothing loaded it refuses
+instead. Oddly named answers are checked for every server on this Mac (oMLX, llama.cpp and Ollama
+answer with the model asked for):
+
+- **The settings** say when the model you typed isn't in the server's list.
+- **Test** fails when another model answered, and "Before you start" opens at what to do.
+- **A chat** stops the answer as soon as another model starts it, before any of its tool calls
+  run or its text shows, and says which model answered instead.
+- **Keeping the model loaded** counts it as a failure.
+
+A variant of the chosen name counts as the chosen model (`lfm3-1.7b-mlx@8bit` for
+`lfm3-1.7b-mlx`, `qwen3:latest` for `qwen3`). Hosted servers aren't checked: they answer with
+longer, dated names (`gpt-5` as `gpt-5-2026-…`). Measured with LM Studio: Test and a chat with a
+mistyped name both stopped with the explanation; the right name worked.
 
 Each new chat starts with the same instructions and tools, so the server's prompt cache serves them
 to it: on oMLX a new chat's first request takes about a second to start instead of 4–5 s.

@@ -4,7 +4,7 @@
 import type { Action, Message, Node, Suggestion } from "@toolbelt/sdk";
 import type { AgentKind } from "./agents";
 import { connection, connections, type Connection, type Draft } from "./connections";
-import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, type Preset } from "./model-api/config";
+import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, sameModel, type Preset } from "./model-api/config";
 import { NOTIFY_AFTER, type KeepState } from "./keeper";
 import type { Problem, Status } from "./session";
 import { findCustom, isCustom, MODEL_API_KEY, secretPrefix, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
@@ -21,7 +21,7 @@ export const SUGGESTIONS: Suggestion[] = [
 /** How many recent chats the ask bar offers under Continue. */
 export const RECENT = 3;
 
-/** `guide`: what a failed Model API test was about (`server`, `tools`, `model`), which opens "Before you start". */
+/** `guide`: what a failed Model API test was about (`server`, `tools`, `model`, `substituted`), which opens "Before you start". */
 export type TestResult = { state: "running"; use?: boolean } | { state: "ok"; text: string } | { state: "failed"; text: string; guide?: string };
 
 /** The Model API server's models, for the model field: listed for one address and key. */
@@ -371,9 +371,12 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 	const models = s.models;
 	const listed = models?.state === "ok" ? models.list : [];
 	const modelNote =
-		models?.state === "loading" ? "Asking the server for its models…" : models?.state === "failed" ? `Couldn't list the server's models: ${models.text}` : models?.state === "ok" ? `${listed.length} model${listed.length === 1 ? "" : "s"} on the server. Choose one that handles tool calls.` : "Choose one that handles tool calls.";
+		models?.state === "loading" ? "Asking the server for its models…" : models?.state === "failed" ? `Couldn't list the server's models: ${models.text}` : models?.state === "ok" ? `${listed.length} model${listed.length === 1 ? "" : "s"} on the server.` : "Choose one that handles tool calls.";
+	// A typed name the server doesn't list: some servers (LM Studio) then answer with another model.
+	const unlisted = models?.state === "ok" && m.model.trim() && listed.length && !listed.some((x) => sameModel(x.id, m.model)) ? ` "${m.model.trim()}" isn't one of them: check the name.` : "";
 	const test = s.tests["model-api"];
 	const guide = test?.state === "failed" && test.guide ? test.guide : null;
+	const note = models?.state === "ok" ? `${modelNote}${unlisted || " Choose one that handles tool calls."}` : modelNote;
 	const fields: Extract<Node, { type: "form" }>["fields"] = [
 		{ type: "select", id: "preset", label: "Server", value: p.id, options: PRESETS.map((x) => ({ value: x.id, label: x.name })) },
 		{ type: "text", id: "url", label: "Address", value: m.url, placeholder: p.url || "https://…/v1", description: p.url ? `Leave empty for ${p.name}'s usual address.` : "The server's address, ending in its API version, such as /v1." },
@@ -381,7 +384,7 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 	if (p.key !== "none")
 		fields.push({ type: "text", id: "key", label: "API key", value: "", secret: MODEL_API_KEY, placeholder: p.key === "required" ? "Required" : "If the server has one", description: "Kept in your Mac's Keychain by ToolBelt." });
 	fields.push(
-		{ type: "combobox", id: "model", label: "Model", value: m.model, options: listed.map((x) => ({ value: x.id, label: x.id, ...(x.context ? { sub: `${Math.round(x.context / 1000)}k context` } : {}) })), freeform: true, placeholder: "Choose or type a model", description: modelNote },
+		{ type: "combobox", id: "model", label: "Model", value: m.model, options: listed.map((x) => ({ value: x.id, label: x.id, ...(x.context ? { sub: `${Math.round(x.context / 1000)}k context` } : {}) })), freeform: true, placeholder: "Choose or type a model", description: note },
 		{ type: "select", id: "thinking", label: "Thinking", value: m.thinking || "off", options: THINKING, description: "Off answers about twice as fast on a model on this Mac." },
 	);
 	// Only for a server on this Mac: a hosted one keeps its models loaded, and checks would cost money.
@@ -444,7 +447,9 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 /** What to set up on the server's side: for a model on this Mac, or a hosted one; a failed Test's item first. */
 export function guideText(p: Preset, url: string, failed: string | null): string {
 	const first =
-		failed === "tools"
+		failed === "substituted"
+			? "**The server answered with another model.** It doesn't have the one chosen, or couldn't load it. Choose one of its models; in LM Studio, turn on just-in-time loading or load the model yourself.\n\n"
+			: failed === "tools"
 			? "**The model answered without calling a tool.** It would answer without reading ToolBelt. Choose a model that handles tool calls (larger ones usually do), or turn thinking on.\n\n"
 			: failed === "server" || failed === "model"
 				? "**ToolBelt couldn't use the server.** Check that it's running, its address, the API key and the model's name.\n\n"
@@ -454,7 +459,7 @@ export function guideText(p: Preset, url: string, failed: string | null): string
 			omlx: "- **oMLX:** turn thinking off for the model (or add a profile with thinking off), keep its context at 32k or more and leave the cache on.",
 			llamacpp: "- **llama.cpp:** start `llama-server` with `--jinja` (tool calls) and `-c 32768` or more.",
 			ollama: "- **Ollama:** raise the context with `OLLAMA_CONTEXT_LENGTH=32768`, and keep the model loaded with `OLLAMA_KEEP_ALIVE`. Use a model tagged *tools*.",
-			lmstudio: "- **LM Studio:** load the model with a context of 32k or more and start its server.",
+			lmstudio: "- **LM Studio:** load the model with a context of 32k or more (or turn on just-in-time loading) and start its server. A model it doesn't have is answered by whichever one is loaded: ToolBelt stops such answers.",
 		};
 		return `${first}${[
 			specific[p.id] ?? "",

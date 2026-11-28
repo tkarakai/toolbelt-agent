@@ -228,6 +228,18 @@ function modelOf(text: string): string | null {
 }
 
 /**
+ * When a server on this Mac answered with a model other than the chosen one, what to tell the
+ * person; null when it's the chosen one. LM Studio answers a model it doesn't have (or won't load)
+ * with whichever model is loaded. Hosted servers aren't checked: they answer with longer, dated
+ * names (`gpt-5` as `gpt-5-2026-…`), and which model answers there is the provider's business.
+ */
+export function substitution(c: Pick<Config, "url" | "model" | "preset">, answered: string | undefined | null): string | null {
+	if (!answered || !isLocal(c.url) || sameModel(answered, c.model)) return null;
+	const jit = c.preset.id === "lmstudio" ? ", or turn on just-in-time loading in LM Studio (or load the model there yourself)" : "";
+	return `${c.preset.name} answered with "${answered}" instead of "${c.model}": it doesn't have that model, or couldn't load it. Choose one of its models in the Model API settings${jit}.`;
+}
+
+/**
  * Whether a server's name for the model that answered is the one asked for. Servers add a variant
  * (`lfm3-1.7b-mlx` answers as `lfm3-1.7b-mlx@8bit` in LM Studio, `qwen3` as `qwen3:latest` in Ollama).
  */
@@ -244,7 +256,7 @@ function detailOf(text: string): string {
 	try {
 		const body = JSON.parse(text) as { error?: { message?: string } | string; detail?: string; message?: string };
 		const m = typeof body.error === "string" ? body.error : (body.error?.message ?? body.detail ?? body.message);
-		return typeof m === "string" ? m.replace(/\s+/g, " ").trim().slice(0, 200) : "";
+		return typeof m === "string" ? m.replace(/\s+/g, " ").trim().slice(0, 200).replace(/[.\s]+$/, "") : "";
 	} catch {
 		return "";
 	}

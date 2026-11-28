@@ -26,7 +26,8 @@ The only surface is `floating`. `src/ui.ts` renders it as a pure function of the
     "Stays on this Mac" or "Sends chats to <host>") with the form `model-api`: `preset`, `url`,
     `key` (a Keychain secret field, `model-api/key`; absent for presets without keys), `model`
     (a combobox of the server's models, freeform) and `thinking`, and the action
-    `refresh-models`. The models are listed afresh whenever the page opens. Then two collapsible cards:
+    `refresh-models`. The models are listed afresh whenever the page opens; a typed model the list
+    doesn't have (`sameModel`) is pointed out under the field. Then two collapsible cards:
     `advanced` (form `model-api-advanced`: `api`, `maxOutput`, `context`, `maxSteps`,
     `instructions`, `extra`) and `guide` ("Before you start": the checklist for a local or hosted
     server, the preset's own item first). A failed Test that says what went wrong (`guide`)
@@ -126,11 +127,18 @@ own Bun process that speaks ACP like any other agent. It's the agents list's **M
   - A cancel aborts the run.
   - A run that fails is answered with an error worded for the person: the server is unreachable,
     the key was refused, the model is unknown, or the conversation is too long.
+  - Another model answering (`substitution`, servers on this Mac only: an answer's
+    `responseModel` that isn't `sameModel` as the chosen one) stops the run: seen in the live
+    generation or a settled entry, the run is aborted, the rest of that answer isn't streamed, tool
+    calls refuse to run, and the prompt fails with the explanation. LM Studio answers a model it
+    doesn't have with whichever one is loaded. Hosted servers answer with dated names and aren't
+    checked.
 - **ACP** (`server.ts`) offers `initialize`, `session/new`, `session/load` (which replays the user
   and agent messages), `session/prompt` and `session/cancel`. It never asks the client anything.
 - **Probe** (`_toolbelt/probe`, an ACP extension method): one request with a single `ping` tool,
   answering `{ ok, text }` or `{ ok: false, reason, text }` with `reason` `server` (unreachable,
-  refused key, unknown model), `tools` (answered without calling it) or `model`. The settings'
+  refused key, unknown model), `tools` (answered without calling it), `model` or `substituted`
+  (another model answered). The settings'
   Test calls it after opening a session (`AgentSession.check`) and shows its `text`; a failure's
   `reason` opens "Before you start".
 - **Keeping the model loaded** (`src/keeper.ts`, in the plugin's process, active mode only): with

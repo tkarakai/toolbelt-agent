@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig, sameModel } from "../src/model-api/config";
+import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig, sameModel, substitution } from "../src/model-api/config";
 import { piModel, serverFetch } from "../src/model-api/models";
 import { ModelApiServer } from "../src/model-api/server";
 import { sweepUnusedSessions } from "../src/session";
@@ -208,6 +208,37 @@ describe("conversations", () => {
 		expect(JSON.stringify(a.messages[0])).not.toMatch(/\b20\d\d\b/); // no date in it
 	});
 
+	test.each([
+		["chat", "/v1/chat/completions"],
+		["messages", "/v1/messages"],
+	] as const)("a server on this Mac answering with another model stops the answer, without running its tools (%s)", async (api, path) => {
+		const fake = fakeModelServer({ respondAs: "lfm3-1.7b-mlx@8bit" });
+		cleanup.push(fake.stop);
+		const calls: { name: string; args: unknown }[] = [];
+		const c = client(env(fake.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" }), calls);
+		await c.request("initialize", { protocolVersion: 1 });
+		const { sessionId } = await c.request("session/new", { cwd: "/tmp", mcpServers: MCP });
+		await expect(c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "What's due?" }] })).rejects.toThrow(
+			'LM Studio answered with "lfm3-1.7b-mlx@8bit" instead of "qwen3.5-4b-mlx": it doesn\'t have that model, or couldn\'t load it. Choose one of its models in the Model API settings, or turn on just-in-time loading',
+		);
+		expect(calls).toEqual([]);
+		expect(c.updates().some((u) => u.sessionUpdate === "agent_message_chunk")).toBe(false);
+		expect(fake.seen.filter((s) => s.path === path)).toHaveLength(1);
+		// The same name, as the server spells a variant of it, is the chosen model.
+		const same = fakeModelServer({ respondAs: "qwen3.5-4b-mlx@4bit" });
+		cleanup.push(same.stop);
+		const d = client(env(same.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" }));
+		await d.request("initialize", { protocolVersion: 1 });
+		const s2 = (await d.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		expect(await d.request("session/prompt", { sessionId: s2, prompt: [{ type: "text", text: "What's due?" }] })).toEqual({ stopReason: "end_turn" });
+	});
+
+	test("a hosted server's other name for the model isn't a substitution", async () => {
+		expect(substitution({ ...readConfig({ [ENV.preset]: "openai", [ENV.model]: "gpt-5" }) }, "gpt-5-2026-08-07")).toBeNull();
+		expect(substitution(readConfig({ [ENV.preset]: "ollama", [ENV.model]: "qwen3" }), "qwen3:latest")).toBeNull();
+		expect(substitution(readConfig({ [ENV.preset]: "omlx", [ENV.model]: "a" }), "b")).toStartWith('oMLX answered with "b" instead of "a"');
+	});
+
 	test("settings problems are reported for the session, and without ToolBelt there's no session", async () => {
 		const c = client({ [ENV.preset]: "omlx" });
 		await c.request("initialize", { protocolVersion: 1 });
@@ -345,5 +376,12 @@ describe("probe (the settings' Test)", () => {
 		const r = await client(env(refused.url)).request("_toolbelt/probe", {});
 		expect(r).toMatchObject({ ok: false, reason: "server" });
 		expect(r.text).toMatch(/refused the API key/);
+	});
+
+	test.each(["chat", "messages"] as const)("over %s: a server on this Mac that answered with another model fails Test", async (api) => {
+		const fake = fakeModelServer({ respondAs: "lfm3-1.7b-mlx@8bit" });
+		cleanup.push(fake.stop);
+		const r = await client(env(fake.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" })).request("_toolbelt/probe", {});
+		expect(r).toMatchObject({ ok: false, reason: "substituted", text: expect.stringContaining('answered with "lfm3-1.7b-mlx@8bit" instead of "qwen3.5-4b-mlx"') });
 	});
 });

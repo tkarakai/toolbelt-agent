@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { validateTree } from "@toolbelt/sdk/validation";
 import type { Node } from "@toolbelt/sdk";
 import { DEFAULTS, MODEL_API_DEFAULTS, type Settings } from "../src/settings";
-import { askSuggestions, floating, SUGGESTIONS, type ViewState } from "../src/ui";
+import { askSuggestions, floating, SUGGESTIONS, type ModelList, type ViewState } from "../src/ui";
 import type { ThreadMeta } from "../src/threads";
 
 const base: ViewState = {
@@ -248,6 +248,18 @@ test("keeping the model loaded: the switch, how it's going, and a warning above 
 	expect(bar.children.at(-2)).toMatchObject({ type: "text", tone: "danger", text: "The model isn't loaded: Couldn't reach http://127.0.0.1:8000/v1: is the server running?" });
 	// Another agent in use: nothing about the Model API's model in the chat.
 	expect(view({ settings: { ...settings, active: "claude" }, keep: failed }).children.some((c: any) => c.tone === "danger")).toBe(false);
+});
+
+test("a model name the server doesn't list is pointed out, and a substituted answer opens its guide item", () => {
+	const page = { view: "agent", id: "model-api" } as const;
+	const models: ModelList = { state: "ok", list: [{ id: "lfm3-1.7b-mlx@8bit" }, { id: "qwen3.5-4b-mlx" }] };
+	const field = (t: ReturnType<typeof view>) => cardById(t, "server").children[0].fields.find((f: any) => f.id === "model");
+	const typo = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "qwen3.5-4b" }) }, page, models });
+	expect(field(typo).description).toBe('2 models on the server. "qwen3.5-4b" isn\'t one of them: check the name.');
+	const listed = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "lfm3-1.7b-mlx" }) }, page, models });
+	expect(field(listed).description).toBe("2 models on the server. Choose one that handles tool calls.");
+	const failed = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "qwen3.5-4b" }) }, page, tests: { "model-api": { state: "failed", text: "LM Studio answered with …", guide: "substituted" } } });
+	expect(cardById(failed, "guide").children[0].text).toStartWith("**The server answered with another model.**");
 });
 
 test("a failed Model API test opens “Before you start” at what went wrong", () => {
