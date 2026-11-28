@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { KEEP_FAST_RETRIES, KEEP_INTERVAL_MS, KEEP_SLOW_INTERVAL_MS, ModelKeeper, type KeepState } from "../src/keeper";
+import { backoff, KEEP_INTERVAL_MS, KEEP_MAX_INTERVAL_MS, ModelKeeper, type KeepState } from "../src/keeper";
 
 /** A keeper with a hand-driven clock and timer. */
 function keeper(results: (number | Error)[], busy = () => false) {
@@ -44,21 +44,54 @@ test("checks at once, then every minute; a slow answer means the server loaded t
 	expect(pings()).toBe(2);
 });
 
-test("failures are retried every minute, then every five; the next success ends them", async () => {
+test("failures back off exponentially: 1, 2, 4, 8 minutes, then every 15; the next success ends them", async () => {
 	const fail = new Error("Couldn't reach http://127.0.0.1:8000/v1: is the server running?");
-	const { k, timers, changes, tick } = keeper(Array(KEEP_FAST_RETRIES).fill(fail).concat([20]));
+	const { k, timers, changes, tick } = keeper([fail, fail, fail, fail, fail, fail, 20, 20]);
 	k.start("omlx|Qwen");
 	await Bun.sleep(0);
-	expect(k.state).toMatchObject({ state: "failed", attempts: 1, text: fail.message });
-	for (let i = 1; i < KEEP_FAST_RETRIES; i++) {
-		expect(timers.at(-1)!.ms).toBe(KEEP_INTERVAL_MS);
+	expect(k.state).toMatchObject({ state: "failed", attempts: 1, text: fail.message, next: 1_000 + KEEP_INTERVAL_MS });
+	const waits = [timers.at(-1)!.ms];
+	for (let i = 0; i < 5; i++) {
 		await tick();
+		waits.push(timers.at(-1)!.ms);
 	}
-	expect(k.state).toMatchObject({ state: "failed", attempts: KEEP_FAST_RETRIES, since: 1_000 });
-	expect(timers.at(-1)!.ms).toBe(KEEP_SLOW_INTERVAL_MS);
+	expect(waits.map((ms) => ms / 60_000)).toEqual([1, 2, 4, 8, 15, 15]);
+	expect(k.state).toMatchObject({ state: "failed", attempts: 6, since: 1_000 });
 	await tick();
 	expect(k.state.state).toBe("ready");
+	expect(timers.at(-1)!.ms).toBe(KEEP_INTERVAL_MS);
 	expect(changes.filter(([a, b]) => a !== b)).toEqual([["off", "checking"], ["checking", "failed"], ["failed", "ready"]]);
+	expect(backoff(50)).toBe(KEEP_MAX_INTERVAL_MS);
+});
+
+test("a model that has to be loaded again check after check backs off too, instead of fighting what unloads it", async () => {
+	// Start (a load is expected), then reloads every time: something else keeps unloading it.
+	const { k, timers, tick } = keeper([30_000, 30_000, 30_000, 30_000, 40, 40]);
+	k.start("omlx|Qwen");
+	await Bun.sleep(0);
+	expect(k.state).toMatchObject({ state: "ready", loaded: true, reloads: 0 });
+	expect(timers.at(-1)!.ms).toBe(KEEP_INTERVAL_MS);
+	await tick();
+	expect(k.state).toMatchObject({ reloads: 1 });
+	expect(timers.at(-1)!.ms).toBe(2 * 60_000);
+	await tick();
+	await tick();
+	expect(k.state).toMatchObject({ reloads: 3 });
+	expect(timers.at(-1)!.ms).toBe(8 * 60_000);
+	// It stays loaded again: back to every minute.
+	await tick();
+	expect(k.state).toMatchObject({ state: "ready", loaded: false, reloads: 0 });
+	expect(timers.at(-1)!.ms).toBe(KEEP_INTERVAL_MS);
+});
+
+test("retry checks at once, between scheduled checks", async () => {
+	const { k, pings } = keeper([new Error("down"), 10]);
+	k.start("omlx|Qwen");
+	await Bun.sleep(0);
+	k.retry();
+	await Bun.sleep(0);
+	expect(pings()).toBe(2);
+	expect(k.state.state).toBe("ready");
 });
 
 test("skips a round while a chat is being answered", async () => {

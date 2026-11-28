@@ -65,14 +65,31 @@ again: 20–40 s for a 27B model on oMLX (measured), before the answer even star
 With **Keep the model loaded** on, while ToolBelt runs and Model API is the agent in use, the plugin
 asks the model for a one-word answer every minute. That costs about 0.1 s on a loaded model, keeps
 the server from treating it as idle, and makes a server that dropped it load it again. The settings
-show when it last checked, and when the server had to load the model for it. If it can't (the server
-isn't running, the model's name changed, the key was refused), a notice says why, the plugin's
-sidebar item shows **!**, and the ask bar says the model isn't loaded. It keeps trying every minute,
-then every 5 minutes, and says when the model is back. ToolBelt never starts the server itself.
+show when it last checked, and when the server had to load the model for it. ToolBelt never starts,
+stops or unloads anything on the server.
+
+You keep running the server your way, and checks adapt:
+
+| You… | What happens |
+|---|---|
+| Restart or upgrade the server | One missed check is only shown in the settings. When it's back, the next check loads the model again |
+| Stop, quit or uninstall it | From the second failed check, a notice says the server can't be reached, the plugin's sidebar item shows **!** and the ask bar says the model isn't loaded. Checks wait longer each time (1, 2, 4, 8, then every 15 minutes); a notice says when the model is back. **Try now** checks at once |
+| Rename or delete the model, or change the key | The same, with the server's reason (unknown model, refused key) |
+| Unload the model yourself | The next check (within a minute) loads it again: that's what the switch is for. Turn the switch off first when you want the memory back |
+| Load other models that push it out | If every check has to load it again, a notice says something keeps unloading it, and checks slow down the same way instead of fighting the other model each minute. Pinning the model on the server (oMLX) prevents this |
+| Keep the server busy with other requests | A check waits its turn (up to 3 minutes). Slow checks count like reloads, so a busy server is checked less often |
 
 The model's memory stays in use while it's on, and the GPU doesn't idle between checks. Turn it off
-when you need the memory. The server's own setting is the first line of defense (see oMLX below);
-this switch also covers a model engine that stopped.
+when you need the memory. The server's own setting is the first line of defense (see the servers
+below); this switch also covers a model engine that stopped.
+
+It works with any local server, through the same request a chat makes. What a check can do
+depends on the server: **oMLX** (measured) and **Ollama** load a model on request, so a check
+reloads a dropped one and keeps Ollama's idle timer (`OLLAMA_KEEP_ALIVE`, 5 minutes by default)
+from running out. **LM Studio** loads one on request only with just-in-time loading on; otherwise
+a check reports the model isn't loaded. **llama.cpp**'s `llama-server` serves the one model it was
+started with, so a check only tells you it's down. Ollama, LM Studio and llama.cpp aren't measured
+yet.
 
 Each new chat starts with the same instructions and tools, so the server's prompt cache serves them
 to it: on oMLX a new chat's first request takes about a second to start instead of 4–5 s.

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { agentCommand, dataDir, definePlugin, type Context } from "@toolbelt/sdk";
 import { AGENTS, modelApiCommand, searchPath, which } from "./agents";
 import { connection, resolveConnection, type Draft } from "./connections";
-import { ModelKeeper, type KeepState } from "./keeper";
+import { ModelKeeper, NOTIFY_AFTER, type KeepState } from "./keeper";
 import { isLocal, listModels, pingModel, preset, readConfig, type Api, type Config } from "./model-api/config";
 import { AgentSession, PREPARED_AGENT, sweepUnusedSessions, type SessionOptions } from "./session";
 import { customId, exists, findCustom, isCustom, loadSettings, MODEL_API_DEFAULTS, MODEL_API_KEY, SECRET_KEY, saveSettings, secretPrefix, type BuiltInId, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
@@ -83,20 +83,27 @@ const keeper = new ModelKeeper({
 	changed: (next, previous) => keepChanged(next, previous),
 });
 
-/** Says when keeping the model loaded starts failing and when it works again; the badge stays meanwhile. */
+/**
+ * Says when keeping the model loaded fails for a while (not a single missed check: a server
+ * restarting for an upgrade misses one) and when it works again; the badge stays meanwhile. Says
+ * once when something keeps unloading the model.
+ */
 function keepChanged(next: KeepState, previous: KeepState) {
 	const model = settings.modelApi.model;
-	if (next.state === "failed" && previous.state !== "failed") {
-		console.error(`[agent] couldn't keep ${model} loaded: ${next.text}`);
-		ctx?.toast(`Couldn't keep ${model} loaded: ${next.text} Trying again every minute.`, "error");
+	const told = (k: KeepState): k is Extract<KeepState, { state: "failed" }> => k.state === "failed" && k.attempts >= NOTIFY_AFTER;
+	if (next.state === "failed") console.error(`[agent] couldn't keep ${model} loaded (try ${next.attempts}): ${next.text}`);
+	if (told(next) && !told(previous)) {
+		ctx?.toast(`Couldn't keep ${model} loaded: ${next.text} Trying again less and less often.`, "error");
 		ctx?.badge("!");
-	} else if (next.state === "ready" && previous.state === "failed") {
+	} else if (next.state === "ready" && told(previous)) {
 		console.error(`[agent] ${model} is loaded again`);
 		ctx?.toast(`${model} is loaded again.`, "success");
 	}
-	// ToolBelt keeps a badge across plugin restarts: clear it whenever it isn't failing (any change).
-	if (next.state !== "failed" && previous.state !== next.state) ctx?.badge(null);
-	if (next.state === "ready" && next.loaded) console.error(`[agent] the server loaded ${model} for a keep-alive check (${Math.round(next.ms / 1000)} s)`);
+	if (next.state === "ready" && next.loaded) console.error(`[agent] the server loaded ${model} for a keep-alive check, or was busy (${Math.round(next.ms / 1000)} s)`);
+	if (next.state === "ready" && next.reloads === 1 && !(previous.state === "ready" && previous.reloads > 0))
+		ctx?.toast(`Something keeps unloading ${model} (another model, or low memory). ToolBelt will check less often instead of loading it again every minute.`, "default");
+	// ToolBelt keeps a badge across plugin restarts: clear it whenever nothing has been said.
+	if (!told(next) && told(previous)) ctx?.badge(null);
 	ctx?.invalidate("floating");
 }
 
@@ -144,6 +151,8 @@ async function ask(text: string) {
 	persist();
 	await answered;
 	persist();
+	// The model just answered: it's loaded, so a keeper backing off can check again now.
+	if (!session.problem && keeper.state.state === "failed") keeper.retry();
 	ctx?.invalidate("floating");
 }
 
@@ -439,6 +448,7 @@ definePlugin({
 				delete tests[id];
 			}
 		} else if (name === "refresh-models") void refreshModels(true);
+		else if (name === "keep-retry") keeper.retry();
 		else if (name === "discard") {
 			const id = target(payload);
 			if (id) {

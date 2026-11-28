@@ -5,7 +5,7 @@ import type { Action, Message, Node, Suggestion } from "@toolbelt/sdk";
 import type { AgentKind } from "./agents";
 import { connection, connections, type Connection, type Draft } from "./connections";
 import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, type Preset } from "./model-api/config";
-import { KEEP_FAST_RETRIES, type KeepState } from "./keeper";
+import { NOTIFY_AFTER, type KeepState } from "./keeper";
 import type { Problem, Status } from "./session";
 import { findCustom, isCustom, MODEL_API_KEY, secretPrefix, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
 import type { ThreadMeta } from "./threads";
@@ -114,7 +114,7 @@ export function floating(s: ViewState): Node {
 
 /** When the model couldn't be kept loaded: said above the composer, since the next answer will wait or fail. */
 function keepWarning(s: ViewState): Node[] {
-	if (s.keep?.state !== "failed" || s.settings.active !== "model-api") return [];
+	if (s.keep?.state !== "failed" || s.keep.attempts < NOTIFY_AFTER || s.settings.active !== "model-api") return [];
 	return [{ type: "text", tone: "danger", text: `The model isn't loaded: ${s.keep.text}` }];
 }
 
@@ -123,10 +123,13 @@ export function keepText(k: KeepState | undefined, now: number): Node | null {
 	if (!k || k.state === "off") return null;
 	if (k.state === "checking") return { type: "text", tone: "muted", text: "Keeping the model loaded: checking it now…" };
 	if (k.state === "failed") {
-		const every = k.attempts >= KEEP_FAST_RETRIES ? "every 5 minutes" : "every minute";
-		return { type: "text", tone: "danger", text: `Couldn't keep the model loaded: ${k.text} Trying again ${every}${k.attempts > 1 ? ` (failing since ${clock(k.since)})` : ""}.` };
+		const since = k.attempts > 1 ? ` Failing since ${clock(k.since)}; waiting longer after each try.` : "";
+		const off = k.attempts >= NOTIFY_AFTER ? " Turn this off if you stopped using this server." : "";
+		return { type: "text", tone: "danger", text: `Couldn't keep the model loaded: ${k.text} Next try at ${clock(k.next)}.${since}${off}` };
 	}
-	const loaded = k.loaded ? ` The server loaded it for the last check (${Math.round(k.ms / 1000)} s).` : "";
+	if (k.reloads > 0)
+		return { type: "text", tone: "warning", text: `The server had to load the model again for the last ${k.reloads + 1} checks: something else keeps unloading it (another model, or low memory). Next check at ${clock(k.next)}; checks slow down until it stays loaded.` };
+	const loaded = k.loaded ? ` The server loaded it for the last check (${Math.round(k.ms / 1000)} s), or was busy.` : "";
 	return { type: "text", tone: "success", text: `Kept loaded: checked ${relative(k.at, now)}.${loaded}` };
 }
 
@@ -398,7 +401,10 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 			title: p.name,
 			description: destination(url),
 			// The server's models change (a model added or deleted): list them again.
-			actions: [{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" }],
+			actions: [
+				...(keep && s.keep?.state === "failed" ? [{ id: "keep-retry", label: "Try now", icon: "rotate-cw" }] : []),
+				{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" },
+			],
 			children: [{ type: "form", id: "model-api", fields }, ...(keep ? [keep] : [])],
 		},
 		{

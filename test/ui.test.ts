@@ -228,12 +228,21 @@ test("keeping the model loaded: the switch, how it's going, and a warning above 
 	expect(fields(off).find((f: any) => f.id === "keepLoaded")).toMatchObject({ type: "switch", value: false });
 	expect(cardById(off, "server").children).toHaveLength(1);
 
-	const ready = view({ settings, page, keep: { state: "ready", at, ms: 38_000, loaded: true, since: at } });
+	const ready = view({ settings, page, keep: { state: "ready", at, ms: 38_000, loaded: true, since: at, reloads: 0, next: at + 60_000 } });
 	expect(fields(ready).find((f: any) => f.id === "keepLoaded").value).toBe(true);
-	expect(cardById(ready, "server").children[1]).toMatchObject({ type: "text", tone: "success", text: "Kept loaded: checked 2 min ago. The server loaded it for the last check (38 s)." });
+	expect(cardById(ready, "server").children[1]).toMatchObject({ type: "text", tone: "success", text: "Kept loaded: checked 2 min ago. The server loaded it for the last check (38 s), or was busy." });
+	expect(cardById(ready, "server").actions.map((a: any) => a.id)).toEqual(["refresh-models"]);
+	const fought = view({ settings, page, keep: { state: "ready", at, ms: 30_000, loaded: true, since: at, reloads: 2, next: at + 4 * 60_000 } });
+	expect(cardById(fought, "server").children[1]).toMatchObject({ tone: "warning", text: expect.stringContaining("for the last 3 checks: something else keeps unloading it") });
 
-	const failed = { state: "failed", at, text: "Couldn't reach http://127.0.0.1:8000/v1: is the server running?", since: at, attempts: 5 } as const;
-	expect(cardById(view({ settings, page, keep: failed }), "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("Trying again every 5 minutes (failing since") });
+	// One failed check (a server restarting) is shown in the settings only.
+	const once = { state: "failed", at, text: "Couldn't reach http://127.0.0.1:8000/v1: is the server running?", since: at, attempts: 1, next: at + 60_000 } as const;
+	expect(cardById(view({ settings, page, keep: once }), "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("Next try at") });
+	expect(view({ settings, keep: once }).children.some((c: any) => c.tone === "danger")).toBe(false);
+	const failed = { ...once, attempts: 5, next: at + 15 * 60_000 } as const;
+	const failing = view({ settings, page, keep: failed });
+	expect(cardById(failing, "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("waiting longer after each try. Turn this off if you stopped using this server.") });
+	expect(cardById(failing, "server").actions[0]).toMatchObject({ id: "keep-retry", label: "Try now" });
 	const bar = view({ settings, keep: failed });
 	expect(bar.mode).toBe("bar");
 	expect(bar.children.at(-2)).toMatchObject({ type: "text", tone: "danger", text: "The model isn't loaded: Couldn't reach http://127.0.0.1:8000/v1: is the server running?" });

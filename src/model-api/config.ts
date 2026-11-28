@@ -208,7 +208,8 @@ export async function pingModel(c: Pick<Config, "url" | "api" | "key" | "model">
 	}
 	const text = await r.text().catch(() => "");
 	if (r.status === 401 || r.status === 403) throw new Error("The server refused the API key.");
-	if (r.status === 404) throw new Error(`The server doesn't know the model "${c.model}".`);
+	// LM Studio also answers 404 for a model it has but won't load on request: its message says which.
+	if (r.status === 404) throw new Error(`The server doesn't know the model "${c.model}"${detailOf(text) ? ` (${detailOf(text)})` : ""}.`);
 	if (!r.ok) throw new Error(`The server answered ${r.status}${detailOf(text) ? `: ${detailOf(text)}` : ""}.`);
 	return { ms: Date.now() - started };
 }

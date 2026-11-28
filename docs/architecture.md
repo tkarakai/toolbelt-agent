@@ -139,11 +139,22 @@ own Bun process that speaks ACP like any other agent. It's the agents list's **M
   Completions or Messages, `max_output_tokens: 16` over Responses, 180 s limit) at once and then
   every 60 s, skipping a round while a chat is answered. A real request, not a server's list of
   loaded models: oMLX kept listing a model whose engine had exited until a request came, and that
-  request reloads it. A check slower than 5 s means the server loaded the model (logged, and said
-  under the switch). Failures retry every 60 s, then every 5 minutes after 5 in a row. When checks
-  start failing the plugin logs it, toasts the reason, sets the badge `!` and shows it above the
-  composer; the next success toasts that the model is loaded again and clears the badge. Saving
-  settings or switching agents starts, retargets or stops it. Hosted servers aren't offered it.
+  request reloads it. A check slower than 5 s means the server loaded the model, or was busy
+  (logged, and said under the switch).
+
+  The person runs the server too (stops, upgrades, quits or uninstalls it, loads other models,
+  unloads this one, keeps it busy), so checks back off exponentially (`backoff`: 1, 2, 4, 8, then
+  15 minutes) in two cases: while they fail, and while every check has to load the model again
+  (`reloads`: something else keeps unloading it, and loading it each minute would fight that). A
+  quick successful check returns to every 60 s; so does **Try now** (`keep-retry`), a chat that
+  was answered while checks were failing, and any settings change (a new target starts over).
+  Every failure is logged and shown under the switch with the next try's time. From the second
+  failure in a row (`NOTIFY_AFTER`; a server restarting for an upgrade misses one check) the
+  plugin toasts the reason, sets the badge `!` and shows it above the composer; the next success
+  toasts that the model is loaded again and clears the badge (start clears a badge left from
+  before a restart). The first check in a row that had to reload the model again toasts once.
+  Saving settings or switching agents starts, retargets or stops it. Hosted servers aren't
+  offered it. ToolBelt never starts, stops or unloads anything on the server.
 - **Models**: the settings list the server's models (`listModels`, `GET <url>/models` with the
   key) when the page opens and when the server, address, API or key changes, for the model field.
 

@@ -106,7 +106,7 @@ describe("keeping the model loaded (pingModel)", () => {
 		await expect(pingModel({ url: "http://127.0.0.1:9/v1", api: "chat", key: "", model: "m" })).rejects.toThrow("Couldn't reach http://127.0.0.1:9/v1: is the server running?");
 		for (const [status, message] of [
 			[401, "The server refused the API key."],
-			[404, 'The server doesn\'t know the model "m".'],
+			[404, 'The server doesn\'t know the model "m" (nope).'],
 			[507, "The server answered 507: nope."],
 		] as const) {
 			const fake = fakeModelServer({ fail: status });
