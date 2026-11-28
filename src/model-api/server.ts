@@ -18,7 +18,6 @@ export type ServerOptions = {
 	/** Starts an MCP server from the client's description (tests pass a fake). */
 	startMcp?: (spec: McpServerSpec) => McpTransport;
 	log?: (line: string) => void;
-	now?: () => Date;
 };
 
 export class ModelApiServer {
@@ -93,7 +92,7 @@ export class ModelApiServer {
 	private ensure(): ModelApiAgent {
 		if (!this.agent) {
 			this.config = readConfig(this.o.env);
-			this.agent = new ModelApiAgent(this.config, { version: this.o.version, log: this.o.log, now: this.o.now });
+			this.agent = new ModelApiAgent(this.config, { version: this.o.version, log: this.o.log });
 		}
 		return this.agent;
 	}

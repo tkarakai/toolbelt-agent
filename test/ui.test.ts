@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { validateTree } from "@toolbelt/sdk/validation";
 import type { Node } from "@toolbelt/sdk";
 import { DEFAULTS, MODEL_API_DEFAULTS, type Settings } from "../src/settings";
-import { askSuggestions, floating, SUGGESTIONS, type ViewState } from "../src/ui";
+import { askSuggestions, floating, SUGGESTIONS, type ModelList, type ViewState } from "../src/ui";
 import type { ThreadMeta } from "../src/threads";
 
 const base: ViewState = {
@@ -202,7 +202,7 @@ test("the Model API page: server, key in the Keychain, models, thinking, and whe
 	const server = cardById(t, "server");
 	expect(server).toMatchObject({ title: "oMLX", description: "Stays on this Mac" });
 	const fields = server.children[0].fields;
-	expect(fields.map((f: any) => f.id)).toEqual(["preset", "url", "key", "model", "thinking"]);
+	expect(fields.map((f: any) => f.id)).toEqual(["preset", "url", "key", "model", "thinking", "keepLoaded"]);
 	expect(fields[2]).toMatchObject({ type: "text", secret: "model-api/key", value: "" });
 	expect(fields[3].options).toEqual([{ value: "Qwen3.8-27B-4bit", label: "Qwen3.8-27B-4bit", sub: "66k context" }, { value: "small", label: "small" }]);
 	expect(cardById(t, "advanced")).toMatchObject({ collapsible: true, description: "Chat Completions (automatic) · up to 12 tool steps per answer" });
@@ -213,8 +213,53 @@ test("the Model API page: server, key in the Keychain, models, thinking, and whe
 	expect(cardById(hosted, "server").description).toBe("Sends chats to openrouter.ai");
 	expect(cardById(hosted, "guide").description).toBe("Using a hosted model");
 	const ollama = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "ollama" }) }, page: { view: "agent", id: "model-api" } });
-	expect(cardById(ollama, "server").children[0].fields.map((f: any) => f.id)).toEqual(["preset", "url", "model", "thinking"]);
+	expect(cardById(ollama, "server").children[0].fields.map((f: any) => f.id)).toEqual(["preset", "url", "model", "thinking", "keepLoaded"]);
+	// Keeping the model loaded is only offered for a server on this Mac.
+	expect(cardById(hosted, "server").children[0].fields.map((f: any) => f.id)).not.toContain("keepLoaded");
 	expect(cardById(ollama, "guide").children[0].text).toContain("OLLAMA_CONTEXT_LENGTH");
+});
+
+test("keeping the model loaded: the switch, how it's going, and a warning above the composer when it fails", () => {
+	const settings: Settings = { ...DEFAULTS, active: "model-api", modelApi: modelApi({ model: "Qwen3.8-27B-4bit", keepLoaded: "on" }) };
+	const page = { view: "agent", id: "model-api" } as const;
+	const at = base.now - 2 * 60_000;
+	const fields = (t: ReturnType<typeof view>) => cardById(t, "server").children[0].fields;
+	const off = view({ settings: { ...settings, modelApi: modelApi({ model: "q" }) }, page });
+	expect(fields(off).find((f: any) => f.id === "keepLoaded")).toMatchObject({ type: "switch", value: false });
+	expect(cardById(off, "server").children).toHaveLength(1);
+
+	const ready = view({ settings, page, keep: { state: "ready", at, ms: 38_000, loaded: true, since: at, reloads: 0, next: at + 60_000 } });
+	expect(fields(ready).find((f: any) => f.id === "keepLoaded").value).toBe(true);
+	expect(cardById(ready, "server").children[1]).toMatchObject({ type: "text", tone: "success", text: "Kept loaded: checked 2 min ago. The server loaded it for the last check (38 s), or was busy." });
+	expect(cardById(ready, "server").actions.map((a: any) => a.id)).toEqual(["refresh-models"]);
+	const fought = view({ settings, page, keep: { state: "ready", at, ms: 30_000, loaded: true, since: at, reloads: 2, next: at + 4 * 60_000 } });
+	expect(cardById(fought, "server").children[1]).toMatchObject({ tone: "warning", text: expect.stringContaining("for the last 3 checks: something else keeps unloading it") });
+
+	// One failed check (a server restarting) is shown in the settings only.
+	const once = { state: "failed", at, text: "Couldn't reach http://127.0.0.1:8000/v1: is the server running?", since: at, attempts: 1, next: at + 60_000 } as const;
+	expect(cardById(view({ settings, page, keep: once }), "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("Next try at") });
+	expect(view({ settings, keep: once }).children.some((c: any) => c.tone === "danger")).toBe(false);
+	const failed = { ...once, attempts: 5, next: at + 15 * 60_000 } as const;
+	const failing = view({ settings, page, keep: failed });
+	expect(cardById(failing, "server").children[1]).toMatchObject({ tone: "danger", text: expect.stringContaining("waiting longer after each try. Turn this off if you stopped using this server.") });
+	expect(cardById(failing, "server").actions[0]).toMatchObject({ id: "keep-retry", label: "Try now" });
+	const bar = view({ settings, keep: failed });
+	expect(bar.mode).toBe("bar");
+	expect(bar.children.at(-2)).toMatchObject({ type: "text", tone: "danger", text: "The model isn't loaded: Couldn't reach http://127.0.0.1:8000/v1: is the server running?" });
+	// Another agent in use: nothing about the Model API's model in the chat.
+	expect(view({ settings: { ...settings, active: "claude" }, keep: failed }).children.some((c: any) => c.tone === "danger")).toBe(false);
+});
+
+test("a model name the server doesn't list is pointed out, and a substituted answer opens its guide item", () => {
+	const page = { view: "agent", id: "model-api" } as const;
+	const models: ModelList = { state: "ok", list: [{ id: "lfm3-1.7b-mlx@8bit" }, { id: "qwen3.5-4b-mlx" }] };
+	const field = (t: ReturnType<typeof view>) => cardById(t, "server").children[0].fields.find((f: any) => f.id === "model");
+	const typo = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "qwen3.5-4b" }) }, page, models });
+	expect(field(typo).description).toBe('2 models on the server. "qwen3.5-4b" isn\'t one of them: check the name.');
+	const listed = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "lfm3-1.7b-mlx" }) }, page, models });
+	expect(field(listed).description).toBe("2 models on the server. Choose one that handles tool calls.");
+	const failed = view({ settings: { ...DEFAULTS, modelApi: modelApi({ preset: "lmstudio", model: "qwen3.5-4b" }) }, page, tests: { "model-api": { state: "failed", text: "LM Studio answered with …", guide: "substituted" } } });
+	expect(cardById(failed, "guide").children[0].text).toStartWith("**The server answered with another model.**");
 });
 
 test("a failed Model API test opens “Before you start” at what went wrong", () => {

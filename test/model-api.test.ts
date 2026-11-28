@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { autoApi, destination, ENV, extraFields, isLocal, listModels, preset, readConfig } from "../src/model-api/config";
+import { autoApi, destination, ENV, extraFields, isLocal, listModels, pingModel, preset, readConfig, sameModel, substitution } from "../src/model-api/config";
 import { piModel, serverFetch } from "../src/model-api/models";
 import { ModelApiServer } from "../src/model-api/server";
+import { sweepUnusedSessions } from "../src/session";
 import { fakeMcp, fakeModelServer } from "./model-api-fakes";
 
 const cleanup: (() => void | Promise<void>)[] = [];
@@ -15,7 +16,7 @@ afterEach(async () => {
 /** A server and a client talking to it, collecting what it sends. */
 function client(env: Record<string, string>, calls: { name: string; args: unknown }[] = []) {
 	const out: any[] = [];
-	const server = new ModelApiServer({ version: "test", env, send: (line) => out.push(JSON.parse(line)), startMcp: () => fakeMcp(calls)(), now: () => new Date("2026-11-26T09:00:00") });
+	const server = new ModelApiServer({ version: "test", env, send: (line) => out.push(JSON.parse(line)), startMcp: () => fakeMcp(calls)() });
 	cleanup.push(() => server.close());
 	let id = 0;
 	const request = async (method: string, params: unknown) => {
@@ -85,6 +86,51 @@ describe("settings", () => {
 	});
 });
 
+describe("keeping the model loaded (pingModel)", () => {
+	test.each([
+		["chat", "/v1/chat/completions", { max_tokens: 1, stream: false }],
+		["messages", "/v1/messages", { max_tokens: 1 }],
+		["responses", "/v1/responses", { max_output_tokens: 16 }],
+	] as const)("asks for a one-token answer over %s", async (api, path, limits) => {
+		const fake = fakeModelServer();
+		cleanup.push(fake.stop);
+		const { ms } = await pingModel({ url: fake.url, api, key: "secret-key", model: "small" });
+		expect(ms).toBeGreaterThanOrEqual(0);
+		expect(fake.seen).toHaveLength(1);
+		expect(fake.seen[0]).toMatchObject({ path, body: { model: "small", ...limits } });
+		if (api === "messages") expect(fake.seen[0]!.headers["x-api-key"]).toBe("secret-key");
+		else expect(fake.seen[0]!.headers.authorization).toBe("Bearer secret-key");
+	});
+
+	test("a server that answers with another model (LM Studio, for a model it doesn't have) isn't keeping this one", async () => {
+		const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => Response.json({ model: "lfm3-1.7b-mlx@8bit", choices: [] }) });
+		cleanup.push(() => server.stop(true));
+		const url = `http://127.0.0.1:${server.port}/v1`;
+		await expect(pingModel({ url, api: "chat", key: "", model: "nope-model" })).rejects.toThrow('The server answered with "lfm3-1.7b-mlx@8bit" instead of "nope-model"');
+		await expect(pingModel({ url, api: "chat", key: "", model: "lfm3-1.7b-mlx" })).resolves.toMatchObject({ ms: expect.any(Number) });
+		expect(sameModel("qwen3:latest", "qwen3")).toBe(true);
+		expect(sameModel("Qwen/Qwen3-0.6B-GGUF:Q8_0", "Qwen/Qwen3-0.6B-GGUF:Q8_0")).toBe(true);
+		expect(sameModel("Qwen3.8-27B-4bit", "qwen3.8-27b-4bit")).toBe(true);
+		expect(sameModel("lfm3-1.7b-mlx@8bit", "qwen3.5-4b-mlx")).toBe(false);
+	});
+
+	test("says why it failed: no server, a refused key, an unknown model, a slow server", async () => {
+		await expect(pingModel({ url: "http://127.0.0.1:9/v1", api: "chat", key: "", model: "m" })).rejects.toThrow("Couldn't reach http://127.0.0.1:9/v1: is the server running?");
+		for (const [status, message] of [
+			[401, "The server refused the API key."],
+			[404, 'The server doesn\'t know the model "m" (nope).'],
+			[507, "The server answered 507: nope."],
+		] as const) {
+			const fake = fakeModelServer({ fail: status });
+			cleanup.push(fake.stop);
+			await expect(pingModel({ url: fake.url, api: "chat", key: "", model: "m" })).rejects.toThrow(message);
+		}
+		const slow = fakeModelServer({ delayMs: 200 });
+		cleanup.push(slow.stop);
+		await expect(pingModel({ url: slow.url, api: "chat", key: "", model: "m" }, fetch, 50)).rejects.toThrow("didn't answer within 0 s");
+	});
+});
+
 describe("only the configured server", () => {
 	test("adds the extra fields and refuses other addresses", async () => {
 		const seen: { url: string; body: string }[] = [];
@@ -128,7 +174,6 @@ describe.each([
 		expect(requests).toHaveLength(2);
 		const first = JSON.stringify(requests[0]!.body);
 		expect(first).toContain("Read a screen before answering"); // ToolBelt's instructions
-		expect(first).toContain("Thursday, November 26, 2026");
 		expect(first).toContain("read_screen");
 		if (api === "messages") expect(requests[0]!.headers["x-api-key"]).toBe("secret-key");
 		else expect(requests[0]!.headers.authorization).toBe("Bearer secret-key");
@@ -146,6 +191,54 @@ describe("conversations", () => {
 		await expect(c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "Hi" }] })).rejects.toThrow(/refused the API key/);
 	});
 
+	test("every new chat starts with the same system prompt and tools, so the server's prompt cache serves them", async () => {
+		const fake = fakeModelServer({ noTools: true });
+		cleanup.push(fake.stop);
+		const c = client(env(fake.url));
+		await c.request("initialize", { protocolVersion: 1 });
+		for (const text of ["First chat", "Second chat"]) {
+			const { sessionId } = await c.request("session/new", { cwd: "/tmp", mcpServers: MCP });
+			await c.request("session/prompt", { sessionId, prompt: [{ type: "text", text }] });
+			await Bun.sleep(5); // a later moment: nothing time-dependent may reach the system prompt
+		}
+		const [a, b] = fake.seen.filter((s) => s.path === "/v1/chat/completions").map((s) => s.body);
+		expect(a.messages[0].role).toBe("system");
+		expect(b.messages[0]).toEqual(a.messages[0]);
+		expect(b.tools).toEqual(a.tools);
+		expect(JSON.stringify(a.messages[0])).not.toMatch(/\b20\d\d\b/); // no date in it
+	});
+
+	test.each([
+		["chat", "/v1/chat/completions"],
+		["messages", "/v1/messages"],
+	] as const)("a server on this Mac answering with another model stops the answer, without running its tools (%s)", async (api, path) => {
+		const fake = fakeModelServer({ respondAs: "lfm3-1.7b-mlx@8bit" });
+		cleanup.push(fake.stop);
+		const calls: { name: string; args: unknown }[] = [];
+		const c = client(env(fake.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" }), calls);
+		await c.request("initialize", { protocolVersion: 1 });
+		const { sessionId } = await c.request("session/new", { cwd: "/tmp", mcpServers: MCP });
+		await expect(c.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "What's due?" }] })).rejects.toThrow(
+			'LM Studio answered with "lfm3-1.7b-mlx@8bit" instead of "qwen3.5-4b-mlx": it doesn\'t have that model, or couldn\'t load it. Choose one of its models in the Model API settings, or turn on just-in-time loading',
+		);
+		expect(calls).toEqual([]);
+		expect(c.updates().some((u) => u.sessionUpdate === "agent_message_chunk")).toBe(false);
+		expect(fake.seen.filter((s) => s.path === path)).toHaveLength(1);
+		// The same name, as the server spells a variant of it, is the chosen model.
+		const same = fakeModelServer({ respondAs: "qwen3.5-4b-mlx@4bit" });
+		cleanup.push(same.stop);
+		const d = client(env(same.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" }));
+		await d.request("initialize", { protocolVersion: 1 });
+		const s2 = (await d.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		expect(await d.request("session/prompt", { sessionId: s2, prompt: [{ type: "text", text: "What's due?" }] })).toEqual({ stopReason: "end_turn" });
+	});
+
+	test("a hosted server's other name for the model isn't a substitution", async () => {
+		expect(substitution({ ...readConfig({ [ENV.preset]: "openai", [ENV.model]: "gpt-5" }) }, "gpt-5-2026-08-07")).toBeNull();
+		expect(substitution(readConfig({ [ENV.preset]: "ollama", [ENV.model]: "qwen3" }), "qwen3:latest")).toBeNull();
+		expect(substitution(readConfig({ [ENV.preset]: "omlx", [ENV.model]: "a" }), "b")).toStartWith('oMLX answered with "b" instead of "a"');
+	});
+
 	test("settings problems are reported for the session, and without ToolBelt there's no session", async () => {
 		const c = client({ [ENV.preset]: "omlx" });
 		await c.request("initialize", { protocolVersion: 1 });
@@ -153,6 +246,25 @@ describe("conversations", () => {
 		const d = client(env("http://127.0.0.1:9/v1"));
 		await expect(d.request("session/new", { cwd: "/tmp", mcpServers: [] })).rejects.toThrow(/No ToolBelt MCP server/);
 		await expect(d.request("session/fork", {})).rejects.toThrow(/Not offered/);
+	});
+
+	test("at start, kept chats that were never asked anything are removed; asked ones stay", async () => {
+		const fake = fakeModelServer();
+		cleanup.push(fake.stop);
+		const state = mkdtempSync(join(tmpdir(), "model-api-"));
+		cleanup.push(() => rmSync(state, { recursive: true, force: true }));
+		const c = client(env(fake.url, { [ENV.state]: state }));
+		await c.request("initialize", { protocolVersion: 1 });
+		const asked = (await c.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		await c.request("session/prompt", { sessionId: asked, prompt: [{ type: "text", text: "What's due today?" }] });
+		const unused = (await c.request("session/new", { cwd: "/tmp", mcpServers: MCP })).sessionId;
+		await c.server.close();
+		mkdirSync(join(state, "not-a-chat"));
+		writeFileSync(join(state, "not-a-chat", "main.jsonl"), "{}");
+		expect(existsSync(join(state, unused, "main.jsonl"))).toBe(true);
+		sweepUnusedSessions(state);
+		expect(readdirSync(state).sort()).toEqual([asked, "not-a-chat"].sort());
+		sweepUnusedSessions(join(state, "missing")); // no folder yet: nothing to do
 	});
 
 	test("a kept chat reopens with its history, in a new process", async () => {
@@ -264,5 +376,12 @@ describe("probe (the settings' Test)", () => {
 		const r = await client(env(refused.url)).request("_toolbelt/probe", {});
 		expect(r).toMatchObject({ ok: false, reason: "server" });
 		expect(r.text).toMatch(/refused the API key/);
+	});
+
+	test.each(["chat", "messages"] as const)("over %s: a server on this Mac that answered with another model fails Test", async (api) => {
+		const fake = fakeModelServer({ respondAs: "lfm3-1.7b-mlx@8bit" });
+		cleanup.push(fake.stop);
+		const r = await client(env(fake.url, { [ENV.preset]: "lmstudio", [ENV.api]: api, [ENV.model]: "qwen3.5-4b-mlx" })).request("_toolbelt/probe", {});
+		expect(r).toMatchObject({ ok: false, reason: "substituted", text: expect.stringContaining('answered with "lfm3-1.7b-mlx@8bit" instead of "qwen3.5-4b-mlx"') });
 	});
 });

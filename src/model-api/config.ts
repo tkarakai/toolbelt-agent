@@ -181,6 +181,87 @@ export function authHeaders(api: Api, key: string): Record<string, string> {
 	return api === "messages" ? { "x-api-key": key, "anthropic-version": "2023-06-01" } : { Authorization: `Bearer ${key}` };
 }
 
+/** How long a keep-alive request may take: loading a large model from disk takes a minute or more. */
+export const PING_TIMEOUT_MS = 180_000;
+
+/**
+ * One tiny request for a one-token answer: a server that dropped the model loads it again, and one
+ * that unloads idle models counts it as use. A server's own "loaded" list can't stand in for this:
+ * oMLX listed a model whose engine had exited until a request came. For keeping a local model loaded.
+ */
+export async function pingModel(c: Pick<Config, "url" | "api" | "key" | "model">, fetcher: typeof fetch = fetch, timeoutMs = PING_TIMEOUT_MS): Promise<{ ms: number }> {
+	const messages = [{ role: "user", content: "Hi" }];
+	const [path, body] =
+		c.api === "messages"
+			? [`${baseUrlFor(c.api, c.url)}/v1/messages`, { model: c.model, max_tokens: 1, messages }]
+			: c.api === "responses"
+				? [`${c.url}/responses`, { model: c.model, input: "Hi", max_output_tokens: 16 }]
+				: [`${c.url}/chat/completions`, { model: c.model, max_tokens: 1, stream: false, messages }];
+	const started = Date.now();
+	let r: Response;
+	try {
+		r = await fetcher(path, { method: "POST", headers: { "content-type": "application/json", ...authHeaders(c.api, c.key) }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+	} catch (e) {
+		const err = e as Error;
+		if (err.name === "TimeoutError" || err.name === "AbortError") throw new Error(`The server didn't answer within ${Math.round(timeoutMs / 1000)} s.`);
+		throw new Error(`Couldn't reach ${c.url}: is the server running?`);
+	}
+	const text = await r.text().catch(() => "");
+	if (r.status === 401 || r.status === 403) throw new Error("The server refused the API key.");
+	// LM Studio also answers 404 for a model it has but won't load on request: its message says which.
+	if (r.status === 404) throw new Error(`The server doesn't know the model "${c.model}"${detailOf(text) ? ` (${detailOf(text)})` : ""}.`);
+	if (!r.ok) throw new Error(`The server answered ${r.status}${detailOf(text) ? `: ${detailOf(text)}` : ""}.`);
+	// LM Studio answers a model it doesn't have with whichever model is loaded: that one isn't kept.
+	const answered = modelOf(text);
+	if (answered && !sameModel(answered, c.model)) throw new Error(`The server answered with "${answered}" instead of "${c.model}": it doesn't have that model, or couldn't load it.`);
+	return { ms: Date.now() - started };
+}
+
+/** The model a JSON answer says it came from, if it says. */
+function modelOf(text: string): string | null {
+	try {
+		const m = (JSON.parse(text) as { model?: unknown }).model;
+		return typeof m === "string" && m ? m : null;
+	} catch {
+		return null; // a stream or no JSON: nothing to compare
+	}
+}
+
+/**
+ * When a server on this Mac answered with a model other than the chosen one, what to tell the
+ * person; null when it's the chosen one. LM Studio answers a model it doesn't have (or won't load)
+ * with whichever model is loaded. Hosted servers aren't checked: they answer with longer, dated
+ * names (`gpt-5` as `gpt-5-2026-…`), and which model answers there is the provider's business.
+ */
+export function substitution(c: Pick<Config, "url" | "model" | "preset">, answered: string | undefined | null): string | null {
+	if (!answered || !isLocal(c.url) || sameModel(answered, c.model)) return null;
+	const jit = c.preset.id === "lmstudio" ? ", or turn on just-in-time loading in LM Studio (or load the model there yourself)" : "";
+	return `${c.preset.name} answered with "${answered}" instead of "${c.model}": it doesn't have that model, or couldn't load it. Choose one of its models in the Model API settings${jit}.`;
+}
+
+/**
+ * Whether a server's name for the model that answered is the one asked for. Servers add a variant
+ * (`lfm3-1.7b-mlx` answers as `lfm3-1.7b-mlx@8bit` in LM Studio, `qwen3` as `qwen3:latest` in Ollama).
+ */
+export function sameModel(answered: string, asked: string): boolean {
+	const norm = (m: string) => m.trim().toLowerCase().replace(/:latest$/, "");
+	const [a, b] = [norm(answered), norm(asked)];
+	if (a === b) return true;
+	const variant = (long: string, short: string) => ["@", ":"].some((sep) => long.startsWith(short + sep));
+	return variant(a, b) || variant(b, a) || a.split("/").pop() === b.split("/").pop();
+}
+
+/** A server's error message from its JSON body, shortened. */
+function detailOf(text: string): string {
+	try {
+		const body = JSON.parse(text) as { error?: { message?: string } | string; detail?: string; message?: string };
+		const m = typeof body.error === "string" ? body.error : (body.error?.message ?? body.detail ?? body.message);
+		return typeof m === "string" ? m.replace(/\s+/g, " ").trim().slice(0, 200).replace(/[.\s]+$/, "") : "";
+	} catch {
+		return "";
+	}
+}
+
 /** The server's models (`GET <url>/models`), for the settings' model list. */
 export async function listModels(c: Pick<Config, "url" | "api" | "key">, fetcher: typeof fetch = fetch): Promise<{ id: string; context?: number }[]> {
 	const r = await fetcher(`${c.url}/models`, { headers: authHeaders(c.api, c.key), signal: AbortSignal.timeout(10_000) });

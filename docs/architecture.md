@@ -26,7 +26,8 @@ The only surface is `floating`. `src/ui.ts` renders it as a pure function of the
     "Stays on this Mac" or "Sends chats to <host>") with the form `model-api`: `preset`, `url`,
     `key` (a Keychain secret field, `model-api/key`; absent for presets without keys), `model`
     (a combobox of the server's models, freeform) and `thinking`, and the action
-    `refresh-models`. The models are listed afresh whenever the page opens. Then two collapsible cards:
+    `refresh-models`. The models are listed afresh whenever the page opens; a typed model the list
+    doesn't have (`sameModel`) is pointed out under the field. Then two collapsible cards:
     `advanced` (form `model-api-advanced`: `api`, `maxOutput`, `context`, `maxSteps`,
     `instructions`, `extra`) and `guide` ("Before you start": the checklist for a local or hosted
     server, the preset's own item first). A failed Test that says what went wrong (`guide`)
@@ -99,6 +100,8 @@ own Bun process that speaks ACP like any other agent. It's the agents list's **M
   - `EXTRA`: a JSON object added to request bodies, which can't set the model, messages or tools;
   - `STATE`: where chats are kept.
 
+  `modelApi.keepLoaded` (below) stays in the plugin and isn't passed to the agent.
+
   A preset supplies the address, the best API (`auto`), how thinking is switched over Chat
   Completions (`chat_template_kwargs.enable_thinking`, `reasoning_effort` or OpenRouter's
   `reasoning`) and a default context size. A settings problem is reported as the error of
@@ -114,22 +117,54 @@ own Bun process that speaks ACP like any other agent. It's the agents list's **M
   - The only tools are ToolBelt's MCP tools, through a small stdio MCP client (`mcp.ts`) started
     from the command in `session/new`. The MCP server gets the plugin's environment without the
     `TOOLBELT_MODEL_API_*` variables.
-  - The system prompt is ToolBelt's MCP instructions, the date and time when the chat was opened
-    (fixed, so the server's prompt cache holds), and the person's instructions. The plugin's
-    preamble arrives in the first message, as with every agent.
+  - The system prompt is ToolBelt's MCP instructions and the person's instructions, the same for
+    every chat so the server's prompt cache serves it (and the tools after it) to each new chat.
+    Nothing time-dependent goes in it: each message carries when it was sent (`sentAt`). The
+    plugin's preamble arrives in the first message, as with every agent.
   - Partial answers and thinking are streamed from pi-durable's live state as
     `agent_message_chunk` and `agent_thought_chunk`. Tool calls are reported by the tools
     themselves (`tool_call` titled `toolbelt.<tool>`, then `tool_call_update`).
   - A cancel aborts the run.
   - A run that fails is answered with an error worded for the person: the server is unreachable,
     the key was refused, the model is unknown, or the conversation is too long.
+  - Another model answering (`substitution`, servers on this Mac only: an answer's
+    `responseModel` that isn't `sameModel` as the chosen one) stops the run: seen in the live
+    generation or a settled entry, the run is aborted, the rest of that answer isn't streamed, tool
+    calls refuse to run, and the prompt fails with the explanation. LM Studio answers a model it
+    doesn't have with whichever one is loaded. Hosted servers answer with dated names and aren't
+    checked.
 - **ACP** (`server.ts`) offers `initialize`, `session/new`, `session/load` (which replays the user
   and agent messages), `session/prompt` and `session/cancel`. It never asks the client anything.
 - **Probe** (`_toolbelt/probe`, an ACP extension method): one request with a single `ping` tool,
   answering `{ ok, text }` or `{ ok: false, reason, text }` with `reason` `server` (unreachable,
-  refused key, unknown model), `tools` (answered without calling it) or `model`. The settings'
+  refused key, unknown model), `tools` (answered without calling it), `model` or `substituted`
+  (another model answered). The settings'
   Test calls it after opening a session (`AgentSession.check`) and shows its `text`; a failure's
   `reason` opens "Before you start".
+- **Keeping the model loaded** (`src/keeper.ts`, in the plugin's process, active mode only): with
+  `modelApi.keepLoaded` `"on"`, while Model API is the agent in use and its address is on this Mac
+  (`isLocal`), `ModelKeeper` sends `pingModel` (a one-token request: `max_tokens: 1` over Chat
+  Completions or Messages, `max_output_tokens: 16` over Responses, 180 s limit) at once and then
+  every 60 s, skipping a round while a chat is answered. A real request, not a server's list of
+  loaded models: oMLX kept listing a model whose engine had exited until a request came, and that
+  request reloads it. An answer whose `model` isn't the one asked for (`sameModel`, allowing
+  `@variant` and `:latest`) is a failure: LM Studio answers an unknown model with whichever one is
+  loaded. A check slower than 5 s means the server loaded the model, or was busy
+  (logged, and said under the switch).
+
+  The person runs the server too (stops, upgrades, quits or uninstalls it, loads other models,
+  unloads this one, keeps it busy), so checks back off exponentially (`backoff`: 1, 2, 4, 8, then
+  15 minutes) in two cases: while they fail, and while every check has to load the model again
+  (`reloads`: something else keeps unloading it, and loading it each minute would fight that). A
+  quick successful check returns to every 60 s; so does **Try now** (`keep-retry`), a chat that
+  was answered while checks were failing, and any settings change (a new target starts over).
+  Every failure is logged and shown under the switch with the next try's time. From the second
+  failure in a row (`NOTIFY_AFTER`; a server restarting for an upgrade misses one check) the
+  plugin toasts the reason, sets the badge `!` and shows it above the composer; the next success
+  toasts that the model is loaded again and clears the badge (start clears a badge left from
+  before a restart). The first check in a row that had to reload the model again toasts once.
+  Saving settings or switching agents starts, retargets or stops it. Hosted servers aren't
+  offered it. ToolBelt never starts, stops or unloads anything on the server.
 - **Models**: the settings list the server's models (`listModels`, `GET <url>/models` with the
   key) when the page opens and when the server, address, API or key changes, for the model field.
 
@@ -143,6 +178,16 @@ ignored (agents that log to stdout).
 
 `src/session.ts` (`AgentSession`) owns one conversation:
 
+- For the Model API agent (`PREPARED_AGENT`), `prepare()` starts the agent and opens a session
+  before the question: on start (active mode), after a new chat, and after the agent in use or its
+  setup changed (`unprepare()` first closes a prepared session that wasn't asked anything). The
+  question then reuses it, waiting for a prepare still in progress. A prepare fails quietly (the
+  question reports the problem) and gives up when a new or saved chat overtakes it. A session
+  closed without being asked anything is `discarded`: the plugin removes its
+  `model-api/<session id>/` folder (also after Test). Since a reload or crash can skip `stop`,
+  start (active mode) also removes `model-api/` chats whose `main.jsonl` has no `pi.user` entry
+  (`sweepUnusedSessions`): never asked anything, so nothing could reopen them. Other agents aren't prepared: they'd keep a
+  process running and might record an empty session for a gain of a fraction of a second.
 - The first question starts the agent in `<data>/workspace` (an empty folder) and opens a session
   whose only MCP server is Toolbelt's: `TOOLBELT_AGENT_COMMAND` (the SDK's `agentCommand()`) plus
   `mcp --client "Agent · <agent name>"`, so Toolbelt's grants and audit log name it. When the
@@ -225,7 +270,8 @@ into the Keychain, once, and says so in the chat and a toast; a value it couldn'
 tried again next start. The first version's file loads as one active agent (a custom one becomes
 `custom:1`). Unknown agents, malformed ids and results for missing agents are dropped.
 `threads/` holds saved chats (above); `workspace/` is the agents' working folder; `model-api/`
-holds the Model API agent's chats. Keychain items (Toolbelt's, per plugin): `model-api/key` and
+holds the Model API agent's chats. `modelApi.keepLoaded` (`"on"` or `""`) was added within schema 1;
+older versions ignore it. Keychain items (Toolbelt's, per plugin): `model-api/key` and
 `agents/<id>/env/<NAME>`; removing the plugin with its data deletes them.
 
 ## Tests

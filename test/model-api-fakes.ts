@@ -13,7 +13,7 @@ function hasToolResult(body: any): boolean {
 	return /"role":"tool"|function_call_output|"tool_result"/.test(text);
 }
 
-export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: number; noTools?: boolean } = {}) {
+export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: number; noTools?: boolean; respondAs?: string } = {}) {
 	const seen: Seen[] = [];
 	const answer = o.answer ?? "You have 2 tasks due today.";
 	const server = Bun.serve({
@@ -29,7 +29,7 @@ export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: n
 			const stream = (text: string) => new Response(text, { headers: { "content-type": "text/event-stream" } });
 			const done = o.noTools || hasToolResult(body);
 			if (url.pathname.endsWith("/chat/completions")) {
-				const base = { id: "c1", object: "chat.completion.chunk", created: 1, model: body.model };
+				const base = { id: "c1", object: "chat.completion.chunk", created: 1, model: o.respondAs ?? body.model };
 				return stream(
 					sse(
 						done
@@ -77,7 +77,7 @@ export function fakeModelServer(o: { answer?: string; fail?: number; delayMs?: n
 				);
 			}
 			if (url.pathname.endsWith("/messages")) {
-				const start = { type: "message_start", message: { id: "msg1", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 40, output_tokens: 1 } } };
+				const start = { type: "message_start", message: { id: "msg1", type: "message", role: "assistant", model: o.respondAs ?? body.model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 40, output_tokens: 1 } } };
 				return stream(
 					named(
 						done

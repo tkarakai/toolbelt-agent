@@ -4,7 +4,8 @@
 import type { Action, Message, Node, Suggestion } from "@toolbelt/sdk";
 import type { AgentKind } from "./agents";
 import { connection, connections, type Connection, type Draft } from "./connections";
-import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, type Preset } from "./model-api/config";
+import { API_NAMES, autoApi, destination, isLocal, preset, PRESETS, sameModel, type Preset } from "./model-api/config";
+import { NOTIFY_AFTER, type KeepState } from "./keeper";
 import type { Problem, Status } from "./session";
 import { findCustom, isCustom, MODEL_API_KEY, secretPrefix, type ConnectionId, type ModelApiSettings, type Settings, type Var } from "./settings";
 import type { ThreadMeta } from "./threads";
@@ -20,7 +21,7 @@ export const SUGGESTIONS: Suggestion[] = [
 /** How many recent chats the ask bar offers under Continue. */
 export const RECENT = 3;
 
-/** `guide`: what a failed Model API test was about (`server`, `tools`, `model`), which opens "Before you start". */
+/** `guide`: what a failed Model API test was about (`server`, `tools`, `model`, `substituted`), which opens "Before you start". */
 export type TestResult = { state: "running"; use?: boolean } | { state: "ok"; text: string } | { state: "failed"; text: string; guide?: string };
 
 /** The Model API server's models, for the model field: listed for one address and key. */
@@ -53,6 +54,8 @@ export type ViewState = {
 	/** What the history is filtered by (titles; the person presses return to search). */
 	search: string;
 	now: number;
+	/** Keeping the Model API agent's local model loaded (when that's on). */
+	keep?: KeepState;
 };
 
 const ACTIONS = {
@@ -93,12 +96,12 @@ export function floating(s: ViewState): Node {
 			busy,
 			suggestions: s.messages.length ? [] : askSuggestions(s),
 			actions: [...(s.messages.length ? [ACTIONS.expand] : []), ...(s.threads.length ? [ACTIONS.history] : []), ACTIONS.settings],
-			children: [...(last ? [{ type: "text", text: last, tone: "muted" } as Node] : []), composer],
+			children: [...(last ? [{ type: "text", text: last, tone: "muted" } as Node] : []), ...keepWarning(s), composer],
 		};
 	}
 	const children: Node[] = [{ type: "conversation", id: "chat", messages: s.messages, empty: "Ask about your tools." }];
 	if (s.problem) children.push(problemCard(s.problem));
-	children.push(composer);
+	children.push(...keepWarning(s), composer);
 	return {
 		type: "floating",
 		mode: "panel",
@@ -108,6 +111,29 @@ export function floating(s: ViewState): Node {
 		children,
 	};
 }
+
+/** When the model couldn't be kept loaded: said above the composer, since the next answer will wait or fail. */
+function keepWarning(s: ViewState): Node[] {
+	if (s.keep?.state !== "failed" || s.keep.attempts < NOTIFY_AFTER || s.settings.active !== "model-api") return [];
+	return [{ type: "text", tone: "danger", text: `The model isn't loaded: ${s.keep.text}` }];
+}
+
+/** How keeping the model loaded is going, under the Model API settings. */
+export function keepText(k: KeepState | undefined, now: number): Node | null {
+	if (!k || k.state === "off") return null;
+	if (k.state === "checking") return { type: "text", tone: "muted", text: "Keeping the model loaded: checking it now…" };
+	if (k.state === "failed") {
+		const since = k.attempts > 1 ? ` Failing since ${clock(k.since)}; waiting longer after each try.` : "";
+		const off = k.attempts >= NOTIFY_AFTER ? " Turn this off if you stopped using this server." : "";
+		return { type: "text", tone: "danger", text: `Couldn't keep the model loaded: ${k.text} Next try at ${clock(k.next)}.${since}${off}` };
+	}
+	if (k.reloads > 0)
+		return { type: "text", tone: "warning", text: `The server had to load the model again for the last ${k.reloads + 1} checks: something else keeps unloading it (another model, or low memory). Next check at ${clock(k.next)}; checks slow down until it stays loaded.` };
+	const loaded = k.loaded ? ` The server loaded it for the last check (${Math.round(k.ms / 1000)} s), or was busy.` : "";
+	return { type: "text", tone: "success", text: `Kept loaded: checked ${relative(k.at, now)}.${loaded}` };
+}
+
+const clock = (at: number) => new Date(at).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
 /** The ask bar's suggestions: recent chats to continue (when the person wants them), then questions to try. */
 export function askSuggestions(s: Pick<ViewState, "settings" | "threads">): Suggestion[] {
@@ -345,9 +371,12 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 	const models = s.models;
 	const listed = models?.state === "ok" ? models.list : [];
 	const modelNote =
-		models?.state === "loading" ? "Asking the server for its models…" : models?.state === "failed" ? `Couldn't list the server's models: ${models.text}` : models?.state === "ok" ? `${listed.length} model${listed.length === 1 ? "" : "s"} on the server. Choose one that handles tool calls.` : "Choose one that handles tool calls.";
+		models?.state === "loading" ? "Asking the server for its models…" : models?.state === "failed" ? `Couldn't list the server's models: ${models.text}` : models?.state === "ok" ? `${listed.length} model${listed.length === 1 ? "" : "s"} on the server.` : "Choose one that handles tool calls.";
+	// A typed name the server doesn't list: some servers (LM Studio) then answer with another model.
+	const unlisted = models?.state === "ok" && m.model.trim() && listed.length && !listed.some((x) => sameModel(x.id, m.model)) ? ` "${m.model.trim()}" isn't one of them: check the name.` : "";
 	const test = s.tests["model-api"];
 	const guide = test?.state === "failed" && test.guide ? test.guide : null;
+	const note = models?.state === "ok" ? `${modelNote}${unlisted || " Choose one that handles tool calls."}` : modelNote;
 	const fields: Extract<Node, { type: "form" }>["fields"] = [
 		{ type: "select", id: "preset", label: "Server", value: p.id, options: PRESETS.map((x) => ({ value: x.id, label: x.name })) },
 		{ type: "text", id: "url", label: "Address", value: m.url, placeholder: p.url || "https://…/v1", description: p.url ? `Leave empty for ${p.name}'s usual address.` : "The server's address, ending in its API version, such as /v1." },
@@ -355,9 +384,19 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 	if (p.key !== "none")
 		fields.push({ type: "text", id: "key", label: "API key", value: "", secret: MODEL_API_KEY, placeholder: p.key === "required" ? "Required" : "If the server has one", description: "Kept in your Mac's Keychain by ToolBelt." });
 	fields.push(
-		{ type: "combobox", id: "model", label: "Model", value: m.model, options: listed.map((x) => ({ value: x.id, label: x.id, ...(x.context ? { sub: `${Math.round(x.context / 1000)}k context` } : {}) })), freeform: true, placeholder: "Choose or type a model", description: modelNote },
+		{ type: "combobox", id: "model", label: "Model", value: m.model, options: listed.map((x) => ({ value: x.id, label: x.id, ...(x.context ? { sub: `${Math.round(x.context / 1000)}k context` } : {}) })), freeform: true, placeholder: "Choose or type a model", description: note },
 		{ type: "select", id: "thinking", label: "Thinking", value: m.thinking || "off", options: THINKING, description: "Off answers about twice as fast on a model on this Mac." },
 	);
+	// Only for a server on this Mac: a hosted one keeps its models loaded, and checks would cost money.
+	if (isLocal(url))
+		fields.push({
+			type: "switch",
+			id: "keepLoaded",
+			label: "Keep the model loaded",
+			value: m.keepLoaded === "on",
+			description: `While ToolBelt runs, asks the model for a one-word answer every minute, so the server loads it again if it dropped it and a chat's first answer doesn't wait for loading. The model's memory stays in use.${s.settings.active === "model-api" ? "" : " Works while Model API is the agent in use."}`,
+		});
+	const keep = s.settings.active === "model-api" ? keepText(s.keep, s.now) : null;
 	return [
 		{
 			type: "card",
@@ -365,8 +404,11 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 			title: p.name,
 			description: destination(url),
 			// The server's models change (a model added or deleted): list them again.
-			actions: [{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" }],
-			children: [{ type: "form", id: "model-api", fields }],
+			actions: [
+				...(keep && s.keep?.state === "failed" ? [{ id: "keep-retry", label: "Try now", icon: "rotate-cw" }] : []),
+				{ id: "refresh-models", label: models?.state === "loading" ? "Listing models…" : "Refresh models", icon: "refresh-cw", disabled: models?.state === "loading" },
+			],
+			children: [{ type: "form", id: "model-api", fields }, ...(keep ? [keep] : [])],
 		},
 		{
 			type: "card",
@@ -405,7 +447,9 @@ function modelApiView(s: ViewState, m: ModelApiSettings): Node[] {
 /** What to set up on the server's side: for a model on this Mac, or a hosted one; a failed Test's item first. */
 export function guideText(p: Preset, url: string, failed: string | null): string {
 	const first =
-		failed === "tools"
+		failed === "substituted"
+			? "**The server answered with another model.** It doesn't have the one chosen, or couldn't load it. Choose one of its models; in LM Studio, turn on just-in-time loading or load the model yourself.\n\n"
+			: failed === "tools"
 			? "**The model answered without calling a tool.** It would answer without reading ToolBelt. Choose a model that handles tool calls (larger ones usually do), or turn thinking on.\n\n"
 			: failed === "server" || failed === "model"
 				? "**ToolBelt couldn't use the server.** Check that it's running, its address, the API key and the model's name.\n\n"
@@ -415,7 +459,7 @@ export function guideText(p: Preset, url: string, failed: string | null): string
 			omlx: "- **oMLX:** turn thinking off for the model (or add a profile with thinking off), keep its context at 32k or more and leave the cache on.",
 			llamacpp: "- **llama.cpp:** start `llama-server` with `--jinja` (tool calls) and `-c 32768` or more.",
 			ollama: "- **Ollama:** raise the context with `OLLAMA_CONTEXT_LENGTH=32768`, and keep the model loaded with `OLLAMA_KEEP_ALIVE`. Use a model tagged *tools*.",
-			lmstudio: "- **LM Studio:** load the model with a context of 32k or more and start its server.",
+			lmstudio: "- **LM Studio:** load the model with a context of 32k or more (or turn on just-in-time loading) and start its server. A model it doesn't have is answered by whichever one is loaded: ToolBelt stops such answers.",
 		};
 		return `${first}${[
 			specific[p.id] ?? "",

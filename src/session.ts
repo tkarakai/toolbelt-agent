@@ -1,7 +1,8 @@
 // One conversation with an agent: starts it on the first question, gives it ToolBelt's MCP server
 // and nothing else, streams its answer into the chat, and refuses its permission requests for
 // anything but ToolBelt's tools. Closing it (a new chat, other settings) stops the agent.
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { AcpClient, AgentError, spawnTransport, type McpServer, type Modes, type PermissionOutcome, type PermissionRequest, type Transport } from "./acp";
 import type { Resolved } from "./agents";
 import type { Message } from "@toolbelt/sdk";
@@ -38,7 +39,12 @@ export type SessionOptions = {
 	agentKey?: () => string | null;
 	/** The clock, for when messages were sent (tests pass a fixed one). */
 	now?: () => Date;
+	/** A session that was opened but never asked anything was closed: its agent's records of it can go. */
+	discarded?: (agentId: string, sessionId: string) => void;
 };
+
+/** The agent whose session is opened ahead of the first question (see `AgentSession.prepare`). */
+export const PREPARED_AGENT = "model-api";
 
 export class AgentSession {
 	chat = new Chat();
@@ -60,6 +66,12 @@ export class AgentSession {
 	private loading = false;
 	/** Sent before the next question when the agent couldn't reopen its session. */
 	private recap: string | null = null;
+	/** The open session is a new one that hasn't been asked anything yet. */
+	private unused = false;
+	/** `prepare` in progress. */
+	private preparing: Promise<void> | null = null;
+	/** Counts closes, so a prepare that something else overtook (a new chat, a saved one) gives up. */
+	private epoch = 0;
 
 	constructor(private readonly o: SessionOptions) {}
 
@@ -75,6 +87,7 @@ export class AgentSession {
 		this.status = "starting";
 		this.o.changed();
 		try {
+			await this.preparing;
 			const { client, sessionId } = await this.connect();
 			this.status = "working";
 			this.o.changed();
@@ -84,6 +97,7 @@ export class AgentSession {
 			const prompt = [...intro, { type: "text", text: `${sentAt(this.o.now?.() ?? new Date())}\n\n${text.trim()}` }];
 			this.told = true;
 			this.recap = null;
+			this.unused = false;
 			const { stopReason } = await client.prompt(sessionId, prompt);
 			this.chat.settle();
 			if (stopReason === "refusal") this.chat.system("The agent declined to answer.");
@@ -114,6 +128,38 @@ export class AgentSession {
 		}
 	}
 
+	/**
+	 * Starts the agent and opens its session before the first question, so asking doesn't wait for
+	 * either. Only for a new, empty chat, and only for the Model API agent (`PREPARED_AGENT`): its
+	 * session is cheap and an unused one is removed (`discarded`). Other agents would keep a process
+	 * running and might record an empty session of their own, to save a fraction of a second. Fails
+	 * quietly: the question then starts the agent itself and reports what's wrong.
+	 */
+	prepare(): Promise<void> {
+		if (this.preparing) return this.preparing;
+		if (this.busy || this.client || this.resume || this.chat.messages.length) return Promise.resolve();
+		const problem = this.problem;
+		const epoch = this.epoch + 1; // open() closes first
+		this.preparing = this.open(undefined, PREPARED_AGENT)
+			.then(() => {})
+			.catch((e) => {
+				this.o.log?.(`couldn't prepare the agent: ${(e as Error).message}`);
+				if (this.epoch !== epoch) return;
+				this.close();
+				this.problem = problem;
+			})
+			.finally(() => {
+				this.preparing = null;
+			});
+		return this.preparing;
+	}
+
+	/** Closes a prepared session nobody asked anything yet: the setup changed, so the next question starts afresh. */
+	async unprepare() {
+		await this.preparing;
+		if (this.unused && !this.busy && !this.chat.messages.length) this.close();
+	}
+
 	/** Stops the answer being written. */
 	stop() {
 		if (this.client && this.sessionId && this.status === "working") this.client.cancel(this.sessionId);
@@ -140,6 +186,9 @@ export class AgentSession {
 	}
 
 	close() {
+		this.epoch++;
+		if (this.unused && this.sessionId && this.agentId) this.o.discarded?.(this.agentId, this.sessionId);
+		this.unused = false;
 		this.client?.close();
 		this.client = null;
 		this.sessionId = null;
@@ -169,8 +218,17 @@ export class AgentSession {
 	}
 
 	private async connectWithInfo(resume?: { sessionId: string | null; agent: string | null }) {
+		return (await this.open(resume))!;
+	}
+
+	/** Starts the agent and opens (or reopens) a session. With `only`, starts nothing unless the agent is that kind. */
+	private async open(resume?: { sessionId: string | null; agent: string | null }, only?: string) {
 		this.close();
+		const epoch = this.epoch;
+		// Only a prepare gives up when overtaken; a question's start is never interrupted this way.
+		const overtaken = () => only !== undefined && this.epoch !== epoch;
 		const agent = await this.o.resolve();
+		if ((only && agent.id !== only) || overtaken()) return null;
 		this.agentName = agent.name;
 		this.agentId = agent.id;
 		if (!agent.ok) {
@@ -197,6 +255,10 @@ export class AgentSession {
 		});
 		this.client = client;
 		const hello = await client.initialize(CLIENT);
+		if (overtaken()) {
+			client.close();
+			return null;
+		}
 		if (hello.protocolVersion !== 1) throw new Error(`${agent.name} speaks ACP ${hello.protocolVersion}; ToolBelt Agent speaks ACP 1.`);
 		const meta = agent.id === "claude" ? CLAUDE_ISOLATION : undefined;
 		const key = this.o.agentKey?.() ?? null;
@@ -218,7 +280,13 @@ export class AgentSession {
 			if (client.closed) throw new Error(`${agent.name} stopped while reopening the chat.`);
 		}
 		const { sessionId, modes } = await client.newSession(this.o.workdir, [toolbelt], meta);
+		if (overtaken()) {
+			this.o.discarded?.(agent.id, sessionId);
+			client.close();
+			return null;
+		}
 		this.sessionId = sessionId;
+		this.unused = true;
 		if (agent.id === "claude") await this.askFirst(client, sessionId, modes);
 		this.session = { id: sessionId, agent: key };
 		return { client, sessionId, info: hello.agentInfo, resumed: false };
@@ -297,4 +365,23 @@ function describe(e: unknown): Problem {
 	const message = e instanceof Error ? e.message : String(e);
 	if (/ENOENT|not found/i.test(message)) return { text: `The agent couldn't start: ${message}`, settings: true };
 	return { text: message };
+}
+
+const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Removes Model API chats that were never asked anything: a session prepared or tested when the
+ * plugin was stopped without its `stop` (a reload, a crash). A chat with a question in it is kept.
+ */
+export function sweepUnusedSessions(dir: string) {
+	if (!existsSync(dir)) return;
+	for (const id of readdirSync(dir)) {
+		const main = join(dir, id, "main.jsonl");
+		if (!SESSION_ID.test(id) || !existsSync(main)) continue;
+		try {
+			if (!readFileSync(main, "utf8").includes('"pi.user"')) rmSync(join(dir, id), { recursive: true, force: true });
+		} catch (e) {
+			console.error(`[agent] couldn't check chat ${id}: ${(e as Error).message}`);
+		}
+	}
 }

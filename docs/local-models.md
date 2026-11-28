@@ -45,6 +45,8 @@ ToolBelt's own lightweight agent, built into the plugin. Open **Model API** in t
 - **Before you start:** what to set up on the server's side, for a model on this Mac or a hosted
   one.
 
+- **Keep the model loaded** (a server on this Mac only): see [below](#keeping-the-model-loaded).
+
 **Test** starts the agent, connects it to ToolBelt and asks the model one small question with a
 tool. It reports how long the answer took and whether the model called the tool. If it fails, it
 opens **Before you start** at the item that explains why. A model that answers without calling
@@ -53,6 +55,68 @@ tools would answer without reading ToolBelt.
 It only ever connects to the address you give it, and ToolBelt's own MCP server. It doesn't name
 chats with an extra request or send a long system prompt of its own, which is why it answers about
 twice as fast as Claude Code on the same model.
+
+### Keeping the model loaded
+
+A local server unloads a model when it runs short of memory, after it's been idle a while (Ollama's
+default is 5 minutes), or when its engine stops. The next question then waits for the model to load
+again: 20–40 s for a 27B model on oMLX (measured), before the answer even starts.
+
+With **Keep the model loaded** on, while ToolBelt runs and Model API is the agent in use, the plugin
+asks the model for a one-word answer every minute. That costs about 0.1 s on a loaded model, keeps
+the server from treating it as idle, and makes a server that dropped it load it again. The settings
+show when it last checked, and when the server had to load the model for it. ToolBelt never starts,
+stops or unloads anything on the server.
+
+You keep running the server your way, and checks adapt:
+
+| You… | What happens |
+|---|---|
+| Restart or upgrade the server | One missed check is only shown in the settings. When it's back, the next check loads the model again |
+| Stop, quit or uninstall it | From the second failed check, a notice says the server can't be reached, the plugin's sidebar item shows **!** and the ask bar says the model isn't loaded. Checks wait longer each time (1, 2, 4, 8, then every 15 minutes); a notice says when the model is back. **Try now** checks at once |
+| Rename or delete the model, or change the key | The same, with the server's reason (unknown model, refused key) |
+| Unload the model yourself | The next check (within a minute) loads it again: that's what the switch is for. Turn the switch off first when you want the memory back |
+| Load other models that push it out | If every check has to load it again, a notice says something keeps unloading it, and checks slow down the same way instead of fighting the other model each minute. Pinning the model on the server (oMLX) prevents this |
+| Keep the server busy with other requests | A check waits its turn (up to 3 minutes). Slow checks count like reloads, so a busy server is checked less often |
+
+The model's memory stays in use while it's on, and the GPU doesn't idle between checks. Turn it off
+when you need the memory. The server's own setting is the first line of defense (see the servers
+below); this switch also covers a model engine that stopped.
+
+It works with any local server, through the same request a chat makes. Measured on 2026-11-27,
+pinging with the model unloaded, then loaded, then after unloading it by hand:
+
+| Server | Loads a dropped model? | Measured |
+|---|---|---|
+| **oMLX** | Yes | 0.1 s loaded; 20–40 s to load a 27B model |
+| **llama.cpp**, `llama serve` with a models preset (router mode) | Yes, and its `--sleep-idle-seconds` timer sees the use | 6 ms loaded; 3.3 s to load a 0.6B model; reloaded after an unload |
+| **LM Studio**, just-in-time loading on | Yes, and its idle TTL (1 h by default) sees the use | 40 ms loaded; 14 s to load a 1.7B model the first time, 3 s after an unload |
+| **Ollama** | Yes, and its `OLLAMA_KEEP_ALIVE` timer (5 minutes by default) sees the use | 22 ms loaded; 2.8 s to load a 4B model, 1.6 s after an unload |
+| **llama.cpp**, `llama-server -m <model>` (one model) | No: it serves the model it was started with, so a check only tells you it's down | Not measured |
+
+With just-in-time loading off, LM Studio can't load the model on request: load it yourself, or
+turn that on.
+
+### When the server answers with another model
+
+LM Studio answers a request for a model it doesn't have (a typo, a deleted model) with whichever
+model is loaded, and says so only in the answer's `model` field. With nothing loaded it refuses
+instead. Oddly named answers are checked for every server on this Mac (oMLX, llama.cpp and Ollama
+answer with the model asked for):
+
+- **The settings** say when the model you typed isn't in the server's list.
+- **Test** fails when another model answered, and "Before you start" opens at what to do.
+- **A chat** stops the answer as soon as another model starts it, before any of its tool calls
+  run or its text shows, and says which model answered instead.
+- **Keeping the model loaded** counts it as a failure.
+
+A variant of the chosen name counts as the chosen model (`lfm3-1.7b-mlx@8bit` for
+`lfm3-1.7b-mlx`, `qwen3:latest` for `qwen3`). Hosted servers aren't checked: they answer with
+longer, dated names (`gpt-5` as `gpt-5-2026-…`). Measured with LM Studio: Test and a chat with a
+mistyped name both stopped with the explanation; the right name worked.
+
+Each new chat starts with the same instructions and tools, so the server's prompt cache serves them
+to it: on oMLX a new chat's first request takes about a second to start instead of 4–5 s.
 
 ## Claude Code on a local server
 
@@ -159,6 +223,10 @@ settings).
    setup here had 8.
 4. **Prompt cache.** Leave the cache on. Each request repeats the earlier conversation, and most
    of it was served from the cache.
+5. **Pin the model** you chat with (the pin in its model settings, or `is_pinned`) so oMLX doesn't
+   unload it to make room for another model. Pinning doesn't cover an engine that stopped: on
+   2026-11-27 oMLX kept listing the model as loaded after its engine exited and only reloaded it on
+   the next request. Model API's **Keep the model loaded** makes that request every minute.
 
 ### llama.cpp (not yet tested)
 
